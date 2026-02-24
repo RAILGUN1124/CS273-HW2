@@ -9,7 +9,7 @@ Uses Optuna for exhaustive hyperparameter search with Bayesian optimization
 
 import pandas as pd
 import numpy as np
-from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.model_selection import train_test_split, cross_val_score, KFold
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.feature_selection import SelectKBest, f_classif, RFE
 from sklearn.metrics import accuracy_score, f1_score, classification_report, confusion_matrix, make_scorer
@@ -231,6 +231,83 @@ def evaluate_on_test(model, X_test, y_test):
     return test_acc, test_f1, y_test_pred
 
 
+def find_optimal_k(X_train, y_train, X_val, y_val, method='selectkbest', k_range=None):
+    """Fin
+    d optimal K value for feature selection using validation set"""
+    print(f"\n{'='*80}")
+    print(f"FINDING OPTIMAL K VALUE FOR FEATURE SELECTION")
+    print(f"{'='*80}")
+    
+    # Combine train and val for cross-validation
+    X_combined = np.vstack([X_train, X_val])
+    y_combined = np.concatenate([y_train, y_val])
+    
+    # Define K range if not provided
+    if k_range is None:
+        n_features = X_train.shape[1]
+        # Test all K values from 1 to n_features - 1
+        max_k = n_features - 1
+        k_range = list(range(1, max_k + 1))
+    
+    print(f"Testing K values: 1 to {len(k_range)}")
+    print(f"Total features available: {X_train.shape[1]}")
+    
+    best_k = None
+    best_score = -1
+    k_scores = []
+    
+    # Use 5-fold cross-validation to evaluate each K
+    kfold = KFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE)
+    
+    print(f"\nEvaluating K values with 5-fold cross-validation...")
+    for k in tqdm(k_range, desc="Testing K values", unit="K"):
+        fold_scores = []
+        
+        for train_idx, val_idx in kfold.split(X_combined):
+            X_cv_train, X_cv_val = X_combined[train_idx], X_combined[val_idx]
+            y_cv_train, y_cv_val = y_combined[train_idx], y_combined[val_idx]
+            
+            # Apply feature selection
+            if method == 'selectkbest':
+                selector = SelectKBest(f_classif, k=k)
+            else:  # rfe
+                estimator = RandomForestClassifier(n_estimators=50, random_state=RANDOM_STATE)
+                selector = RFE(estimator, n_features_to_select=k, step=5)
+            
+            selector.fit(X_cv_train, y_cv_train)
+            X_cv_train_fs = selector.transform(X_cv_train)
+            X_cv_val_fs = selector.transform(X_cv_val)
+            
+            # Train a simple model for evaluation
+            rf = RandomForestClassifier(n_estimators=100, max_depth=10, random_state=RANDOM_STATE)
+            rf.fit(X_cv_train_fs, y_cv_train)
+            
+            # Evaluate on validation fold
+            y_pred = rf.predict(X_cv_val_fs)
+            score = f1_score(y_cv_val, y_pred, average='macro')
+            fold_scores.append(score)
+        
+        # Calculate average score across folds
+        avg_score = np.mean(fold_scores)
+        std_score = np.std(fold_scores)
+        k_scores.append((k, avg_score, std_score))
+        
+        if avg_score > best_score:
+            best_score = avg_score
+            best_k = k
+    
+    print(f"\n{'='*80}")
+    print(f"OPTIMAL K FOUND: {best_k} features (CV F1 Score: {best_score:.4f})")
+    print(f"{'='*80}")
+    print(f"\nTop 5 K values by CV F1 score:")
+    sorted_k_scores = sorted(k_scores, key=lambda x: x[1], reverse=True)[:5]
+    for k, score, std in sorted_k_scores:
+        marker = " ← SELECTED" if k == best_k else ""
+        print(f"  K={k:3d}: F1={score:.4f} (±{std:.4f}){marker}")
+    
+    return best_k, k_scores
+
+
 def apply_feature_selection(X_train, y_train, X_val, X_test, method='selectkbest', k=34):
     """Apply feature selection technique"""
     if method == 'selectkbest':
@@ -293,7 +370,7 @@ def train_and_evaluate_classifier(X_train, y_train, X_val, y_val, X_test, y_test
     # - 50-100 trials: Fast, good results
     # - 100-200 trials: Balanced (recommended)
     # - 200-500 trials: Very thorough, may take longer
-    n_trials = 100
+    n_trials = 200
     best_params, cv_results = hyperparameter_tuning_with_cv(
         X_train_proc, y_train, X_val_proc, y_val, n_trials=n_trials
     )
@@ -376,13 +453,13 @@ def compare_results(results_dict, dataset_name='Dataset'):
 
 
 def compare_results_with_k(results_dict, dataset_name='Dataset', k_values=None, best_k=None):
-    """Compare performance across all K values"""
+    """Compare performance between baseline and CV-selected K"""
     print(f"\n{'='*80}")
     print(f"PERFORMANCE COMPARISON - {dataset_name}")
     print(f"{'='*80}")
     
     # Show baseline
-    print(f"\nBASELINE:")
+    print(f"\nBASELINE (No Feature Selection):")
     print(f"{'Configuration':<25} {'Features':<12} {'Train Acc':<12} {'Test Acc':<12} {'Train F1':<12} {'Test F1':<12}")
     print(f"{'-'*95}")
     
@@ -392,20 +469,16 @@ def compare_results_with_k(results_dict, dataset_name='Dataset', k_values=None, 
               f"{result['train_acc']:<12.4f} {result['test_acc']:<12.4f} "
               f"{result['train_f1']:<12.4f} {result['test_f1']:<12.4f}")
     
-    # Show all K values
-    print(f"\nFEATURE SELECTION RESULTS:")
+    # Show selected K
+    print(f"\nFEATURE SELECTION (CV-Selected K):")
     print(f"{'K Value':<10} {'Features':<12} {'Train Acc':<12} {'Test Acc':<12} {'Train F1':<12} {'Test F1':<12}")
     print(f"{'-'*80}")
     
-    if k_values:
-        for k in k_values:
-            key = f'k_{k}'
-            if key in results_dict:
-                result = results_dict[key]
-                best_marker = " ← BEST" if k == best_k else ""
-                print(f"{'K=' + str(k):<10} {result['n_features']:<12} "
-                      f"{result['train_acc']:<12.4f} {result['test_acc']:<12.4f} "
-                      f"{result['train_f1']:<12.4f} {result['test_f1']:<12.4f}{best_marker}")
+    if best_k is not None and f'k_{best_k}' in results_dict:
+        result = results_dict[f'k_{best_k}']
+        print(f"{'K=' + str(best_k):<10} {result['n_features']:<12} "
+              f"{result['train_acc']:<12.4f} {result['test_acc']:<12.4f} "
+              f"{result['train_f1']:<12.4f} {result['test_f1']:<12.4f} ← SELECTED (via CV)")
     
     print(f"\n{'='*80}")
     print(f"KEY INSIGHTS:")
@@ -416,10 +489,11 @@ def compare_results_with_k(results_dict, dataset_name='Dataset', k_values=None, 
         baseline_result = results_dict['no_fs']
         
         improvement = ((best_result['test_f1'] - baseline_result['test_f1']) / baseline_result['test_f1']) * 100
-        print(f"Best K value: {best_k} features")
-        print(f"Best Test F1: {best_result['test_f1']:.4f}")
+        print(f"Best K value: {best_k} features (SELECTED USING CV VALIDATION)")
+        print(f"Test F1 for selected K: {best_result['test_f1']:.4f}")
         print(f"Improvement over baseline: {improvement:+.2f}% change in F1 score")
         print(f"Feature Reduction: {baseline_result['n_features']} → {best_result['n_features']} features ({best_result['n_features']/baseline_result['n_features']*100:.1f}% retained)")
+        print(f"\nNote: K was selected using cross-validation on train+val data.")
         
         # Show selected features for best K
         if best_result['feature_names'] is not None:
@@ -446,7 +520,7 @@ def process_dataset(filepath, dataset_name, k_values=None):
     results_dict = {}
     
     # ========================================================================
-    # WITHOUT FEATURE SELECTION (BASELINE)
+    # EXPERIMENT 1: ALL FEATURES (BASELINE)
     # ========================================================================
     print(f"\n\n{'#'*80}")
     print(f"# EXPERIMENT 1: ALL FEATURES (BASELINE)")
@@ -461,37 +535,41 @@ def process_dataset(filepath, dataset_name, k_values=None):
     results_dict['no_fs'] = results_no_fs
     
     # ========================================================================
-    # WITH FEATURE SELECTION - TRY DIFFERENT K VALUES
+    # EXPERIMENT 2: FEATURE SELECTION - FIND OPTIMAL K USING CV
     # ========================================================================
     print(f"\n\n{'#'*80}")
-    print(f"# EXPERIMENT 2: FEATURE SELECTION - TESTING K VALUES {k_values}")
+    print(f"# EXPERIMENT 2: FEATURE SELECTION - OPTIMAL K SELECTION")
     print(f"{'#'*80}")
     
-    k_results = []
-    print(f"\nTesting {len(k_values)} different K values...")
-    for k in tqdm(k_values, desc="K values", unit="K"):
-        print(f"\n\n{'='*80}")
-        print(f"TESTING K={k} FEATURES")
-        print(f"{'='*80}")
-        
-        results_k = train_and_evaluate_classifier(
-            X_train, y_train, X_val, y_val, X_test, y_test,
-            use_feature_selection=True,
-            fs_method='selectkbest',
-            k=k,
-            feature_names=feature_cols,
-            dataset_name=dataset_name
-        )
-        k_results.append(results_k)
-        results_dict[f'k_{k}'] = results_k
+    # Find optimal K using cross-validation (NO TEST SET INVOLVED)
+    best_k, cv_k_scores = find_optimal_k(
+        X_train, y_train, X_val, y_val,
+        method='rfe',
+        k_range=k_values
+    )
     
-    # Find best K based on test F1 score
-    best_k_result = max(k_results, key=lambda x: x['test_f1'])
-    best_k = best_k_result['k_value']
+    # Train and evaluate with the selected best K
+    print(f"\n\n{'='*80}")
+    print(f"TRAINING MODEL WITH SELECTED K={best_k}")
+    print(f"{'='*80}")
+    
+    best_k_result = train_and_evaluate_classifier(
+        X_train, y_train, X_val, y_val, X_test, y_test,
+        use_feature_selection=True,
+        fs_method='rfe',
+        k=best_k,
+        feature_names=feature_cols,
+        dataset_name=dataset_name
+    )
+    
+    # Store CV scores in result for visualization
+    best_k_result['cv_k_scores'] = cv_k_scores
+    results_dict[f'k_{best_k}'] = best_k_result
     results_dict['best_k'] = best_k_result
+    results_dict['cv_k_scores'] = cv_k_scores
     
-    # Compare all results
-    compare_results_with_k(results_dict, dataset_name, k_values, best_k)
+    # Compare results
+    compare_results_with_k(results_dict, dataset_name, [best_k], best_k)
     
     return results_dict
 
@@ -527,10 +605,13 @@ def create_combined_visualizations():
     for result in all_experiment_results:
         dataset_name = result['dataset_name']
         if dataset_name not in datasets:
-            datasets[dataset_name] = {'no_fs': None, 'k_results': []}
+            datasets[dataset_name] = {'no_fs': None, 'best_k': None, 'cv_k_scores': None}
         
         if result['feature_selection']:
-            datasets[dataset_name]['k_results'].append(result)
+            datasets[dataset_name]['best_k'] = result
+            # Store cv_k_scores if available
+            if 'cv_k_scores' in result:
+                datasets[dataset_name]['cv_k_scores'] = result['cv_k_scores']
         else:
             datasets[dataset_name]['no_fs'] = result
     
@@ -547,7 +628,7 @@ def create_combined_visualizations():
         create_overall_summary_figure(datasets)
         pbar.update(1)
     
-    print(f"\n✓ All visualizations generated successfully!")
+    print(f"\n All visualizations generated successfully!")
     print(f"  Total files created: {len(datasets) * 2 + 1}")
 
 
@@ -556,14 +637,11 @@ def create_dataset_comprehensive_figure(dataset_name, results_data):
     
     # Get baseline and best K result
     no_fs_result = results_data['no_fs']
-    k_results = results_data['k_results']
+    best_k_result = results_data.get('best_k', None)
     
-    if not k_results:
+    if not best_k_result:
         print(f"Warning: No feature selection results for {dataset_name}")
         return
-    
-    # Find best result based on test F1
-    best_k_result = max(k_results, key=lambda x: x['test_f1'])
     
     # Create figure with 2 rows (baseline and best K) and 5 columns
     fig = plt.figure(figsize=(24, 10))
@@ -571,7 +649,7 @@ def create_dataset_comprehensive_figure(dataset_name, results_data):
     
     configs = [
         (no_fs_result, f"All Features (n={no_fs_result['n_features']})"),
-        (best_k_result, f"Best K={best_k_result.get('k_value', best_k_result['n_features'])} Features")
+        (best_k_result, f"Best K={best_k_result.get('k_value', best_k_result['n_features'])} Features (CV Selected)")
     ]
     
     for i, (result, label) in enumerate(configs):
@@ -663,99 +741,102 @@ def create_dataset_comprehensive_figure(dataset_name, results_data):
 
 
 def create_k_performance_figure(dataset_name, results_data):
-    """Create a figure showing performance across different K values"""
+    """Create a figure showing CV validation scores for K selection process"""
     
     no_fs_result = results_data['no_fs']
-    k_results = results_data['k_results']
+    best_k_result = results_data.get('best_k', None)
+    cv_k_scores = results_data.get('cv_k_scores', None)
     
-    if not k_results:
+    if not best_k_result or not cv_k_scores:
+        print(f"Warning: No CV scores available for {dataset_name}")
         return
     
-    # Sort by K value
-    k_results_sorted = sorted(k_results, key=lambda x: x.get('k_value', x['n_features']))
+    # Extract CV validation scores (used for K selection)
+    cv_k_dict = {k: (avg_f1, std_f1) for k, avg_f1, std_f1 in cv_k_scores}
+    k_values = sorted(cv_k_dict.keys())
     
-    k_values = [r.get('k_value', r['n_features']) for r in k_results_sorted]
-    test_accs = [r['test_acc'] for r in k_results_sorted]
-    test_f1s = [r['test_f1'] for r in k_results_sorted]
-    train_accs = [r['train_acc'] for r in k_results_sorted]
-    train_f1s = [r['train_f1'] for r in k_results_sorted]
+    val_f1s = [cv_k_dict[k][0] for k in k_values]  # CV validation F1 scores
+    val_f1_stds = [cv_k_dict[k][1] for k in k_values]  # CV validation F1 stds
     
     # Baseline values
-    baseline_test_acc = no_fs_result['test_acc']
     baseline_test_f1 = no_fs_result['test_f1']
-    baseline_train_acc = no_fs_result['train_acc']
     baseline_train_f1 = no_fs_result['train_f1']
+    
+    # Best K info
+    best_k = best_k_result['k_value']
+    best_k_test_f1 = best_k_result['test_f1']
+    best_k_train_f1 = best_k_result['train_f1']
+    best_idx = k_values.index(best_k)
     
     # Create figure
     fig, axes = plt.subplots(2, 2, figsize=(16, 12))
     
-    # Plot 1: Test Accuracy vs K
-    axes[0, 0].plot(k_values, test_accs, 'o-', linewidth=2, markersize=8, label='Test Accuracy', color='steelblue')
-    axes[0, 0].axhline(y=baseline_test_acc, color='red', linestyle='--', linewidth=2, label=f'Baseline (All Features): {baseline_test_acc:.4f}')
+    # Plot 1: Validation F1 vs K (USED FOR K SELECTION)
+    axes[0, 0].errorbar(k_values, val_f1s, yerr=val_f1_stds, fmt='o-', linewidth=2, markersize=8, 
+                        capsize=5, capthick=2, label='Validation F1 (CV)', color='green')
+    axes[0, 0].axhline(y=baseline_test_f1, color='red', linestyle='--', linewidth=2, 
+                       label=f'Baseline Test F1: {baseline_test_f1:.4f}')
+    axes[0, 0].plot(best_k, val_f1s[best_idx], 'r*', markersize=20, 
+                    label=f'Selected K={best_k}', zorder=5)
     axes[0, 0].set_xlabel('Number of Features (K)', fontsize=12)
-    axes[0, 0].set_ylabel('Test Accuracy', fontsize=12)
-    axes[0, 0].set_title('Test Accuracy vs Number of Features', fontsize=14, fontweight='bold')
+    axes[0, 0].set_ylabel('Validation F1 Score (CV)', fontsize=12)
+    axes[0, 0].set_title('Validation F1 vs Number of Features\n(Used for K Selection)', fontsize=14, fontweight='bold')
     axes[0, 0].legend(fontsize=10)
     axes[0, 0].grid(True, alpha=0.3)
     axes[0, 0].set_xticks(k_values)
     axes[0, 0].set_ylim([0, 1.0])
     
-    # Highlight best K
-    best_idx = test_f1s.index(max(test_f1s))
-    axes[0, 0].plot(k_values[best_idx], test_accs[best_idx], 'r*', markersize=20, label=f'Best K={k_values[best_idx]}')
+    # Plot 2: Selected K Performance Comparison
+    metrics = ['Train F1', 'Val F1 (CV)', 'Test F1']
+    values = [best_k_train_f1, val_f1s[best_idx], best_k_test_f1]
+    colors_bar = ['lightblue', 'green', 'darkblue']
     
-    # Plot 2: Test F1 vs K
-    axes[0, 1].plot(k_values, test_f1s, 'o-', linewidth=2, markersize=8, label='Test F1', color='darkred')
-    axes[0, 1].axhline(y=baseline_test_f1, color='blue', linestyle='--', linewidth=2, label=f'Baseline (All Features): {baseline_test_f1:.4f}')
-    axes[0, 1].set_xlabel('Number of Features (K)', fontsize=12)
-    axes[0, 1].set_ylabel('Test Macro F1', fontsize=12)
-    axes[0, 1].set_title('Test F1 Score vs Number of Features', fontsize=14, fontweight='bold')
+    axes[0, 1].bar(metrics, values, color=colors_bar, edgecolor='black', alpha=0.7)
+    axes[0, 1].axhline(y=baseline_test_f1, color='red', linestyle='--', linewidth=2, 
+                       label=f'Baseline: {baseline_test_f1:.4f}')
+    axes[0, 1].set_ylabel('F1 Score', fontsize=12)
+    axes[0, 1].set_title(f'Selected K={best_k} Performance\nTrain vs Validation vs Test', fontsize=14, fontweight='bold')
     axes[0, 1].legend(fontsize=10)
-    axes[0, 1].grid(True, alpha=0.3)
-    axes[0, 1].set_xticks(k_values)
+    axes[0, 1].grid(True, alpha=0.3, axis='y')
     axes[0, 1].set_ylim([0, 1.0])
     
-    # Highlight best K
-    axes[0, 1].plot(k_values[best_idx], test_f1s[best_idx], 'r*', markersize=20, label=f'Best K={k_values[best_idx]}')
-    
-    # Plot 3: Train vs Test Accuracy
-    axes[1, 0].plot(k_values, train_accs, 'o-', linewidth=2, markersize=8, label='Train Accuracy', color='lightblue')
-    axes[1, 0].plot(k_values, test_accs, 's-', linewidth=2, markersize=8, label='Test Accuracy', color='steelblue')
-    axes[1, 0].axhline(y=baseline_train_acc, color='lightcoral', linestyle='--', linewidth=1, alpha=0.7, label=f'Baseline Train: {baseline_train_acc:.4f}')
-    axes[1, 0].axhline(y=baseline_test_acc, color='darkred', linestyle='--', linewidth=1, alpha=0.7, label=f'Baseline Test: {baseline_test_acc:.4f}')
+    # Plot 3: CV Score Distribution Across K Values
+    axes[1, 0].bar(k_values, val_f1s, color='lightgreen', edgecolor='black', alpha=0.7, label='Validation F1')
+    axes[1, 0].bar([best_k], [val_f1s[best_idx]], color='darkgreen', edgecolor='black', label=f'Selected K={best_k}')
     axes[1, 0].set_xlabel('Number of Features (K)', fontsize=12)
-    axes[1, 0].set_ylabel('Accuracy', fontsize=12)
-    axes[1, 0].set_title('Train vs Test Accuracy', fontsize=14, fontweight='bold')
-    axes[1, 0].legend(fontsize=9)
-    axes[1, 0].grid(True, alpha=0.3)
+    axes[1, 0].set_ylabel('Validation F1 Score (CV)', fontsize=12)
+    axes[1, 0].set_title('All K Values Evaluated During Selection', fontsize=14, fontweight='bold')
+    axes[1, 0].legend(fontsize=10)
+    axes[1, 0].grid(True, alpha=0.3, axis='y')
     axes[1, 0].set_xticks(k_values)
     axes[1, 0].set_ylim([0, 1.0])
     
     # Plot 4: Performance Summary Table
     axes[1, 1].axis('off')
     
-    summary_text = "K VALUE PERFORMANCE SUMMARY\n"
+    summary_text = "K SELECTION SUMMARY\n"
     summary_text += "="*50 + "\n\n"
-    summary_text += f"{'K':<5} {'Test Acc':<12} {'Test F1':<12} {'Status':<15}\n"
-    summary_text += "-"*50 + "\n"
+    summary_text += "Selection Process:\n"
+    summary_text += f"  - Evaluated {len(k_values)} K values (1 to {max(k_values)})\n"
+    summary_text += f"  - Used 5-fold CV on train+val data\n"
+    summary_text += "Selected Configuration:\n"
+    summary_text += f"  K = {best_k} features\n"
+    summary_text += f"  CV Val F1: {val_f1s[best_idx]:.4f} (±{val_f1_stds[best_idx]:.3f})\n\n"
+    summary_text += "Final Test Performance:\n"
+    summary_text += f"  Baseline (all features): {baseline_test_f1:.4f}\n"
+    summary_text += f"  Selected K={best_k}: {best_k_test_f1:.4f}\n"
+    improvement = ((best_k_test_f1 - baseline_test_f1) / baseline_test_f1) * 100
+    summary_text += f"  Improvement: {improvement:+.2f}%\n\n"
+    summary_text += "Feature Reduction:\n"
+    summary_text += f"  {no_fs_result['n_features']} → {best_k} features\n"
+    summary_text += f"  ({best_k/no_fs_result['n_features']*100:.1f}% retained)\n\n"
+    summary_text += "Note: K selected using validation\n"
     
-    for i, k in enumerate(k_values):
-        status = "★ BEST" if i == best_idx else ""
-        summary_text += f"{k:<5} {test_accs[i]:<12.4f} {test_f1s[i]:<12.4f} {status:<15}\n"
-    
-    summary_text += "-"*50 + "\n"
-    summary_text += f"{'ALL':<5} {baseline_test_acc:<12.4f} {baseline_test_f1:<12.4f} {'Baseline':<15}\n"
-    summary_text += "\n"
-    summary_text += f"Best K: {k_values[best_idx]} features\n"
-    summary_text += f"Best Test F1: {test_f1s[best_idx]:.4f}\n"
-    improvement = ((test_f1s[best_idx] - baseline_test_f1) / baseline_test_f1) * 100
-    summary_text += f"Improvement: {improvement:+.2f}%\n"
-    
-    axes[1, 1].text(0.1, 0.5, summary_text, fontsize=11, family='monospace',
+    axes[1, 1].text(0.05, 0.5, summary_text, fontsize=10, family='monospace',
                    verticalalignment='center', transform=axes[1, 1].transAxes,
-                   bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.8))
+                   bbox=dict(boxstyle='round', facecolor='lightgreen', alpha=0.3))
     
-    fig.suptitle(f'Feature Selection Analysis (K Value Optimization): {dataset_name}', 
+    fig.suptitle(f'Feature Selection Analysis (K Selected via CV Validation): {dataset_name}', 
                  fontsize=16, fontweight='bold', y=0.995)
     plt.tight_layout()
     
@@ -781,13 +862,12 @@ def create_overall_summary_figure(datasets):
         all_labels.append(dataset_name)
         
         no_fs = results_data['no_fs']
-        k_results = results_data['k_results']
+        best_k_result = results_data.get('best_k', None)
         
         test_acc_no_fs.append(no_fs['test_acc'])
         test_f1_no_fs.append(no_fs['test_f1'])
         
-        if k_results:
-            best_k_result = max(k_results, key=lambda x: x['test_f1'])
+        if best_k_result:
             test_acc_best.append(best_k_result['test_acc'])
             test_f1_best.append(best_k_result['test_f1'])
             best_k_values.append(best_k_result.get('k_value', best_k_result['n_features']))
@@ -869,8 +949,8 @@ def main():
     print(" "*18 + "with Optuna Bayesian Optimization")
     print(" "*15 + "Target: Label (binary classes - 0: negative, 1: positive)")
     print(" "*15 + "Dataset: Already balanced (130 samples per class)")
-    print(" "*15 + "Testing all K values for feature selection (K=1 to K=9)")
-    print(" "*15 + "Exhaustive search: 100 Optuna trials per configuration")
+    print(" "*15 + "CV-based K selection for optimal feature subset")
+    print(" "*15 + "Exhaustive search: 200 Optuna trials per configuration")
     print(" "*15 + "Progress tracking: tqdm progress bars enabled")
     print("="*80)
     
@@ -881,17 +961,23 @@ def main():
     
     # Will test all K values from 1 to n_features-1 (default behavior)
     # You can also specify specific K values like: k_values = [3, 5, 7, 8, 9]
-    k_values = None  # None means try all values from 1 to n_features-1
+    k_values = None  # None means try all values from 1 to n_features-1 for CV selection
     
     # Estimated runtime information
     n_k_values = 9  # K=1 to K=9
-    n_trials_per_k = 100
-    total_trials = n_k_values * n_trials_per_k + 100  # +100 for baseline
-    print(f"\nEstimated total trials: ~{total_trials}")
-    print(f"  - Baseline (all features): 100 trials")
-    print(f"  - Feature selection: {n_k_values} K values × 100 trials = {n_k_values * n_trials_per_k} trials")
-    print(f"\nThis may take 15-30 minutes depending on your hardware.")
-    print(f"Progress bars will track each stage.\n")
+    n_trials_baseline = 200
+    n_trials_best_k = 200
+    cv_evaluations = n_k_values * 5  # 5-fold CV for each K
+    total_trials = n_trials_baseline + cv_evaluations + n_trials_best_k
+    
+    print(f"\nEstimated execution:")
+    print(f"  - Baseline (all features): {n_trials_baseline} Optuna trials")
+    print(f"  - CV K selection: {n_k_values} K values × 5 folds = {cv_evaluations} evaluations")
+    print(f"  - Best K training: {n_trials_best_k} Optuna trials")
+    print(f"  - Total: ~{total_trials} model trainings")
+    print(f"\nEstimated time: 5-10 minutes depending on hardware.")
+    print(f"Progress bars will track each stage.")
+    print(f"\nIMPORTANT: Best K is selected using CV on train+val data \n")
     
     # Process each dataset
     for filepath, dataset_name in datasets:
@@ -917,12 +1003,14 @@ def main():
     create_combined_visualizations()
     
     print("\n" + "="*80)
-    print(" "*25 + "✓ ANALYSIS COMPLETE")
+    print(" "*25 + " ANALYSIS COMPLETE")
     print("="*80)
     print("\nGenerated files:")
     print("  - reviewfeatures_full_analysis.png (Detailed analysis)")
-    print("  - reviewfeatures_k_optimization.png (K value comparison)")
+    print("  - reviewfeatures_k_optimization.png (K value comparison with CV validation scores)")
     print("  - overall_model_comparison.png (Summary)")
+    print("\nNote: K optimization graphs show VALIDATION scores (used for selection),")
+    print("      not test scores, to demonstrate proper ML methodology.")
     print("\n" + "="*80 + "\n")
 
 
