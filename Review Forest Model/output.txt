@@ -1,0 +1,243 @@
+
+================================================================================
+                    REVIEW CLASSIFICATION ANALYSIS
+                  with Optuna Bayesian Optimization
+               Target: Label (binary classes - 0: negative, 1: positive)
+               Dataset: Already balanced (130 samples per class)
+               CV-based K selection for optimal feature subset
+               Exhaustive search: 200 Optuna trials per configuration
+               Progress tracking: tqdm progress bars enabled
+================================================================================
+
+Estimated execution:
+  - Baseline (all features): 200 Optuna trials
+  - CV K selection: 9 K values × 5 folds = 45 evaluations
+  - Best K training: 200 Optuna trials
+  - Total: ~445 model trainings
+
+Estimated time: 5-10 minutes depending on hardware.
+Progress bars will track each stage.
+
+IMPORTANT: Best K is selected using CV on train+val data 
+
+
+********************************************************************************
+Processing dataset: ReviewFeatures
+********************************************************************************
+
+================================================================================
+Dataset: ReviewFeatures
+================================================================================
+Total samples: 260
+Number of features: 10
+Target variable: Label
+
+Class Distribution:
+  Class 0: 130 samples (50.0%)
+  Class 1: 130 samples (50.0%)
+
+Data Split (60:20:20):
+  Training set: 156 samples (60.0%)
+  Validation set: 52 samples (20.0%)
+  Test set: 52 samples (20.0%)
+
+
+################################################################################
+# EXPERIMENT 1: ALL FEATURES (BASELINE)
+################################################################################
+
+--------------------------------------------------------------------------------
+RANDOM FOREST CLASSIFICATION - WITHOUT FEATURE SELECTION
+--------------------------------------------------------------------------------
+
+  Step 1-2: 5-Fold Cross-Validation for Hyperparameter Tuning with Optuna
+  Using Bayesian optimization (TPE) to find optimal parameters...
+  Running 200 trials for exhaustive search...
+  Progress:
+
+  Optuna Optimization Results:
+    Completed 200 trials
+    Best trial: #111
+
+  Top 8 trials by F1 score:
+    1. Trial #111: n=464, d=10, split=20: F1=0.6564
+    2. Trial #117: n=136, d=8, split=19: F1=0.6528
+    3. Trial #118: n=135, d=7, split=19: F1=0.6528
+    4. Trial #56: n=212, d=6, split=18: F1=0.6524
+    5. Trial #198: n=217, d=8, split=19: F1=0.6522
+    6. Trial #121: n=149, d=8, split=19: F1=0.6522
+    7. Trial #191: n=196, d=7, split=18: F1=0.6521
+    8. Trial #46: n=484, d=10, split=17: F1=0.6520
+
+  Best Parameters: {'bootstrap': True, 'n_estimators': 464, 'max_depth': 10, 'min_samples_split': 20, 'min_samples_leaf': 3, 'max_features': 'log2', 'min_impurity_decrease': 0.007596159414990664, 'max_samples': 0.6800949991496885}
+  Best CV F1: 0.6564, Train Acc: 0.8077
+
+  Step 3: Retraining final model with best hyperparameters
+  Training on combined train+val: 208 samples
+  Training Accuracy: 0.8077
+  Training Macro F1: 0.8074
+
+  Step 4: Final Evaluation on Test Set
+  Test Accuracy: 0.6731
+  Test Macro F1: 0.6630
+
+  Detailed Classification Report:
+              precision    recall  f1-score   support
+
+           0     0.6286    0.8462    0.7213        26
+           1     0.7647    0.5000    0.6047        26
+
+    accuracy                         0.6731        52
+   macro avg     0.6966    0.6731    0.6630        52
+weighted avg     0.6966    0.6731    0.6630        52
+
+
+
+################################################################################
+# EXPERIMENT 2: FEATURE SELECTION - OPTIMAL K SELECTION
+################################################################################
+
+================================================================================
+FINDING OPTIMAL K VALUE FOR FEATURE SELECTION
+================================================================================
+Testing K values: 1 to 9
+Total features available: 10
+
+Evaluating K values with 5-fold cross-validation...
+
+================================================================================
+OPTIMAL K FOUND: 5 features (CV F1 Score: 0.6372)
+================================================================================
+
+Top 5 K values by CV F1 score:
+  K=  5: F1=0.6372 (±0.0308) ← SELECTED
+  K=  8: F1=0.6171 (±0.0282)
+  K=  4: F1=0.6078 (±0.0341)
+  K=  7: F1=0.6031 (±0.0232)
+  K=  6: F1=0.6030 (±0.0234)
+
+
+================================================================================
+TRAINING MODEL WITH SELECTED K=5
+================================================================================
+
+--------------------------------------------------------------------------------
+RANDOM FOREST CLASSIFICATION - WITH FEATURE SELECTION
+--------------------------------------------------------------------------------
+
+  Feature Selection: RFE (k=5 features)
+  Selected 5 features
+
+  Step 1-2: 5-Fold Cross-Validation for Hyperparameter Tuning with Optuna
+  Using Bayesian optimization (TPE) to find optimal parameters...
+  Running 200 trials for exhaustive search...
+  Progress:
+
+  Optuna Optimization Results:
+    Completed 200 trials
+    Best trial: #167
+
+  Top 8 trials by F1 score:
+    1. Trial #167: n=201, d=4, split=7: F1=0.6720
+    2. Trial #163: n=193, d=4, split=7: F1=0.6674
+    3. Trial #184: n=216, d=4, split=7: F1=0.6621
+    4. Trial #192: n=187, d=4, split=7: F1=0.6617
+    5. Trial #165: n=225, d=4, split=7: F1=0.6617
+    6. Trial #174: n=233, d=4, split=7: F1=0.6617
+    7. Trial #112: n=393, d=4, split=7: F1=0.6575
+    8. Trial #158: n=234, d=4, split=8: F1=0.6575
+
+  Best Parameters: {'bootstrap': True, 'n_estimators': 201, 'max_depth': 4, 'min_samples_split': 7, 'min_samples_leaf': 1, 'max_features': 'log2', 'min_impurity_decrease': 0.00444310025051569, 'max_samples': 0.529581013298853}
+  Best CV F1: 0.6720, Train Acc: 0.7740
+
+  Step 3: Retraining final model with best hyperparameters
+  Training on combined train+val: 208 samples
+  Training Accuracy: 0.7740
+  Training Macro F1: 0.7734
+
+  Step 4: Final Evaluation on Test Set
+  Test Accuracy: 0.6923
+  Test Macro F1: 0.6882
+
+  Detailed Classification Report:
+              precision    recall  f1-score   support
+
+           0     0.6562    0.8077    0.7241        26
+           1     0.7500    0.5769    0.6522        26
+
+    accuracy                         0.6923        52
+   macro avg     0.7031    0.6923    0.6882        52
+weighted avg     0.7031    0.6923    0.6882        52
+
+
+================================================================================
+PERFORMANCE COMPARISON - ReviewFeatures
+================================================================================
+
+BASELINE (No Feature Selection):
+Configuration             Features     Train Acc    Test Acc     Train F1     Test F1     
+-----------------------------------------------------------------------------------------------
+All Features              10           0.8077       0.6731       0.8074       0.6630      
+
+FEATURE SELECTION (CV-Selected K):
+K Value    Features     Train Acc    Test Acc     Train F1     Test F1     
+--------------------------------------------------------------------------------
+K=5        5            0.7740       0.6923       0.7734       0.6882       ← SELECTED (via CV)
+
+================================================================================
+KEY INSIGHTS:
+--------------------------------------------------------------------------------
+Best K value: 5 features (SELECTED USING CV VALIDATION)
+Test F1 for selected K: 0.6882
+Improvement over baseline: +3.80% change in F1 score
+Feature Reduction: 10 → 5 features (50.0% retained)
+
+Note: K was selected using cross-validation on train+val data.
+
+Selected Features (K=5):
+  1. AWL
+  2. ASL
+  3. NWO
+  4. NAJ
+  5. CDV
+
+================================================================================
+GENERATING FINAL SUMMARY...
+================================================================================
+
+
+================================================================================
+FINAL SUMMARY - ALL RESULTS
+================================================================================
+
+Dataset              Feat Sel     Features   Train Acc    Test Acc     Test F1     
+-------------------------------------------------------------------------------------
+ReviewFeatures       No           10         0.8077       0.6731       0.6630      
+ReviewFeatures       Yes          5          0.7740       0.6923       0.6882      
+
+
+================================================================================
+GENERATING COMBINED VISUALIZATIONS
+================================================================================
+
+Saved: reviewfeatures_full_analysis.png
+Saved: reviewfeatures_k_optimization.png
+Saved: overall_model_comparison.png
+
+ All visualizations generated successfully!
+  Total files created: 3
+
+================================================================================
+                          ANALYSIS COMPLETE
+================================================================================
+
+Generated files:
+  - reviewfeatures_full_analysis.png (Detailed analysis)
+  - reviewfeatures_k_optimization.png (K value comparison with CV validation scores)
+  - overall_model_comparison.png (Summary)
+
+Note: K optimization graphs show VALIDATION scores (used for selection),
+      not test scores, to demonstrate proper ML methodology.
+
+================================================================================
+
