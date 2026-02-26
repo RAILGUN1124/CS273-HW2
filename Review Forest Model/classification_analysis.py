@@ -24,7 +24,7 @@ optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 # Set random seeds for reproducibility
 #694269 is the best random state for reproducibility and good performance across all experiments
-RANDOM_STATE = 694269
+RANDOM_STATE = 69426942
 np.random.seed(RANDOM_STATE)
 
 # Set plotting style
