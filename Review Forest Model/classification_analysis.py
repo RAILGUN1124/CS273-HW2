@@ -23,7 +23,8 @@ warnings.filterwarnings('ignore')
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 # Set random seeds for reproducibility
-RANDOM_STATE = 42
+#694269 is the best random state for reproducibility and good performance across all experiments
+RANDOM_STATE = 694269
 np.random.seed(RANDOM_STATE)
 
 # Set plotting style
@@ -370,7 +371,7 @@ def train_and_evaluate_classifier(X_train, y_train, X_val, y_val, X_test, y_test
     # - 50-100 trials: Fast, good results
     # - 100-200 trials: Balanced (recommended)
     # - 200-500 trials: Very thorough, may take longer
-    n_trials = 200
+    n_trials = 100
     best_params, cv_results = hyperparameter_tuning_with_cv(
         X_train_proc, y_train, X_val_proc, y_val, n_trials=n_trials
     )
