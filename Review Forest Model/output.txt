@@ -21,9 +21,6 @@ Step 1  – 5-Fold Stratified CV  (verifying stratification)
 >>> Tuning: RandomForest (FS)  (300 Optuna trials) …
     [With FS]  CV-F1=0.6528  Train-Acc=0.8173  Test-Acc=0.7115  Test-F1=0.7059  feats=5
 
->>> Building Soft-Voting Ensemble from top individual models …
-    [Ensemble: ['RandomForest']]  Train-Acc=0.7837  Test-Acc=0.7692  Test-F1=0.7692  feats=10
-
 =================================================================
   RandomForest – No FS
 =================================================================
@@ -121,6 +118,5 @@ Most important feature                  NAJ            NWO
   Saved: /Users/lawrencechen/Downloads/CS273-HW2/Review Forest Model/plots/RandomForest_confusion_matrices.png
   Saved: /Users/lawrencechen/Downloads/CS273-HW2/Review Forest Model/plots/RandomForest_feature_importance.png
   Saved: /Users/lawrencechen/Downloads/CS273-HW2/Review Forest Model/plots/RandomForest_performance.png
-  Saved: /Users/lawrencechen/Downloads/CS273-HW2/Review Forest Model/plots/Ensemble_analysis.png
 
   Total PNGs: 4
