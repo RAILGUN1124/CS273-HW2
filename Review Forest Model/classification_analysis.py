@@ -25,14 +25,7 @@ import optuna
 from sklearn.model_selection import StratifiedKFold, train_test_split, cross_val_score
 from sklearn.ensemble import (
     RandomForestClassifier,
-    GradientBoostingClassifier,
-    ExtraTreesClassifier,
-    VotingClassifier,
 )
-from sklearn.svm import SVC
-from sklearn.linear_model import LogisticRegression
-from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
-from sklearn.neighbors import KNeighborsClassifier
 from sklearn.feature_selection import SelectKBest, f_classif, mutual_info_classif
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
@@ -359,58 +352,6 @@ def save_model_plots(model_name: str, r_no_fs: dict, r_fs: dict,
     fig.savefig(path, dpi=300, bbox_inches="tight"); plt.close(fig)
     print(f"  Saved: {path}")
 
-
-def save_ensemble_plot(r_ens: dict, y_tv: np.ndarray, y_te: np.ndarray, out_dir: str):
-    """Generate 1 PNG for the Soft-Voting Ensemble.
-
-    File produced: Ensemble_analysis.png
-    """
-    fig = plt.figure(figsize=(16, 5))
-    gs = fig.add_gridspec(1, 4, wspace=0.35)
-
-    # Train CM
-    ax0 = fig.add_subplot(gs[0, 0])
-    _plot_confusion_matrix(ax0, confusion_matrix(y_tv, r_ens["y_train_pred"]),
-                           f"Train\nAcc={r_ens['train_acc']:.3f}", "Blues")
-
-    # Test CM
-    ax1 = fig.add_subplot(gs[0, 1])
-    _plot_confusion_matrix(ax1, confusion_matrix(y_te, r_ens["y_pred"]),
-                           f"Test\nAcc={r_ens['acc']:.3f}  F1={r_ens['f1']:.3f}", "Oranges")
-
-    # Per-class F1
-    ax2 = fig.add_subplot(gs[0, 2])
-    f1_pc = f1_score(y_te, r_ens["y_pred"], average=None)
-    colors_c = sns.color_palette("viridis", 2)
-    ax2.bar(["Fake", "Real"], f1_pc, color=colors_c, edgecolor="black")
-    ax2.set_ylabel("F1"); ax2.set_ylim([0, 1.05])
-    ax2.set_title(f"Per-Class F1 (macro={r_ens['f1']:.3f})", fontsize=10, fontweight="bold")
-    ax2.grid(True, alpha=0.3, axis="y")
-
-    # Summary text
-    ax3 = fig.add_subplot(gs[0, 3])
-    ax3.axis("off")
-    estimators = r_ens["best_params"].get("estimators", [])
-    txt = "ENSEMBLE SUMMARY\n" + "=" * 30 + "\n\n"
-    txt += f"Voting: soft\n"
-    txt += f"Estimators:\n"
-    for e in estimators:
-        txt += f"  • {e}\n"
-    txt += f"\nTrain Acc : {r_ens['train_acc']:.4f}\n"
-    txt += f"Test Acc  : {r_ens['acc']:.4f}\n"
-    txt += f"Test F1   : {r_ens['f1']:.4f}\n"
-    txt += f"Features  : {r_ens['n_features']}\n"
-    ax3.text(0.05, 0.5, txt, fontsize=10, family="monospace",
-             verticalalignment="center", transform=ax3.transAxes,
-             bbox=dict(boxstyle="round", facecolor="lightyellow", alpha=0.5))
-
-    fig.suptitle(f"{r_ens['name']} – Analysis", fontsize=14, fontweight="bold", y=0.995)
-    plt.tight_layout()
-    path = os.path.join(out_dir, "Ensemble_analysis.png")
-    fig.savefig(path, dpi=300, bbox_inches="tight"); plt.close(fig)
-    print(f"  Saved: {path}")
-
-
 # =========================================================================
 #  Reporting helpers
 # =========================================================================
@@ -518,48 +459,6 @@ def main():
             print(f"    [{lbl}]  CV-F1={r['best_cv_f1']:.4f}  "
                   f"Train-Acc={train_acc:.4f}  Test-Acc={acc:.4f}  Test-F1={f1:.4f}  feats={len(sel_feats)}")
 
-    # ── Build Soft-Voting Ensemble from top-3 models (no FS variant) ───
-    print("\n>>> Building Soft-Voting Ensemble from top individual models …")
-    top3_no_fs = sorted([r for r in results if not r["fs"]],
-                        key=lambda r: -r["best_cv_f1"])[:3]
-    ensemble_estimators = [(r["name"], r["model"]) for r in top3_no_fs]
-
-    # VotingClassifier needs pre-fitted estimators when we wrap Pipelines
-    # So we build a fresh one and fit on train+val
-    voting_pipe = Pipeline([
-        ("scaler", StandardScaler()),
-        ("clf", VotingClassifier(
-            estimators=[
-                (r["name"], r["model"].named_steps["clf"]) for r in top3_no_fs
-            ],
-            voting="soft",
-        )),
-    ])
-    voting_pipe.fit(X_tv, y_tv)
-    y_train_pred_v = voting_pipe.predict(X_tv)
-    train_acc_v = accuracy_score(y_tv, y_train_pred_v)
-    acc_v, f1_v, y_pred_v = evaluate_on_test(voting_pipe, X_te, y_te)
-    ensemble_names = [r["name"] for r in top3_no_fs]
-    print(f"    [Ensemble: {ensemble_names}]  "
-          f"Train-Acc={train_acc_v:.4f}  Test-Acc={acc_v:.4f}  Test-F1={f1_v:.4f}  feats=10")
-
-    # Add ensemble to results
-    results.append({
-        "name": f"Ensemble({'+'.join(ensemble_names)})",
-        "fs": False,
-        "best_cv_f1": np.mean([r["best_cv_f1"] for r in top3_no_fs]),
-        "best_params": {"estimators": ensemble_names, "voting": "soft"},
-        "train_acc": train_acc_v,
-        "acc": acc_v,
-        "f1": f1_v,
-        "n_features": 10,
-        "sel_feats": list(FEATURE_COLS),
-        "importances": np.zeros(10),
-        "rank": np.arange(10),
-        "model": voting_pipe,
-        "y_pred": y_pred_v,
-        "y_train_pred": y_train_pred_v,
-    })
 
     # Pick best per category
     best_no_fs = sorted([r for r in results if not r["fs"]],
@@ -595,8 +494,6 @@ def main():
         save_model_plots(model_name, r_nf, r_fs, y_tv, y_te, plot_dir)
 
     # 1 PNG for the ensemble
-    r_ens = next(r for r in results if r["name"].startswith("Ensemble"))
-    save_ensemble_plot(r_ens, y_tv, y_te, plot_dir)
 
     print(f"\n  Total PNGs: {len(MODEL_REGISTRY) * 3 + 1}")
 
