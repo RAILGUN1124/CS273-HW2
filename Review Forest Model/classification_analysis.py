@@ -123,7 +123,7 @@ def _build_objective(model_cls, suggest_fn, X_tv, y_tv, use_fs: bool):
 
         steps = [("scaler", StandardScaler())]
         if use_fs:
-            k = trial.suggest_int("selector_k", 3, 7) #Only half of the features, at least 3 to avoid too small feature sets and at most 9 to not be the same as baseline (all features)
+            k = trial.suggest_int("selector_k", 3, 9) #Only half of the features, at least 3 to avoid too small feature sets and at most 9 to not be the same as baseline (all features)
             score_func_name = trial.suggest_categorical("score_func", ["f_classif", "mutual_info"])
             score_func = f_classif if score_func_name == "f_classif" else mutual_info_classif
             steps.append(("selector", SelectKBest(score_func=score_func, k=k)))
