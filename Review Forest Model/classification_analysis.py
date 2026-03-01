@@ -273,43 +273,37 @@ def save_model_plots(model_name: str, r_no_fs: dict, r_fs: dict,
     """Generate 3 PNGs for a single model (no-FS & with-FS variants).
 
     Files produced:
-      {model}_confusion_matrices.png
-      {model}_feature_importance.png
+      {model}_overview.png
       {model}_performance.png
     """
-    # ── PNG 1: Confusion Matrices (2×2) ──────────────────────────────────
-    fig, axes = plt.subplots(2, 2, figsize=(10, 8))
+    # ── PNG 1: Overview (2×3) – CMs + Feature Importance ──────────────────
+    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
     train_cm_nf = confusion_matrix(y_tv, r_no_fs["y_train_pred"])
     test_cm_nf  = confusion_matrix(y_te, r_no_fs["y_pred"])
     train_cm_fs = confusion_matrix(y_tv, r_fs["y_train_pred"])
     test_cm_fs  = confusion_matrix(y_te, r_fs["y_pred"])
 
+    # Top row – No FS
     _plot_confusion_matrix(axes[0, 0], train_cm_nf,
         f"No FS – Train\nAcc={r_no_fs['train_acc']:.3f}", "Blues")
     _plot_confusion_matrix(axes[0, 1], test_cm_nf,
         f"No FS – Test\nAcc={r_no_fs['acc']:.3f}  F1={r_no_fs['f1']:.3f}", "Oranges")
+    _plot_feature_importance(axes[0, 2], r_no_fs["sel_feats"], r_no_fs["importances"],
+                             r_no_fs["rank"],
+                             f"No FS – Feature Importance ({r_no_fs['n_features']} features)")
+
+    # Bottom row – With FS
     _plot_confusion_matrix(axes[1, 0], train_cm_fs,
         f"With FS – Train\nAcc={r_fs['train_acc']:.3f}", "Blues")
     _plot_confusion_matrix(axes[1, 1], test_cm_fs,
         f"With FS – Test\nAcc={r_fs['acc']:.3f}  F1={r_fs['f1']:.3f}", "Oranges")
-
-    fig.suptitle(f"{model_name} – Confusion Matrices", fontsize=14, fontweight="bold", y=0.995)
-    plt.tight_layout()
-    path = os.path.join(out_dir, f"{model_name}_confusion_matrices.png")
-    fig.savefig(path, dpi=300, bbox_inches="tight"); plt.close(fig)
-    print(f"  Saved: {path}")
-
-    # ── PNG 2: Feature Importance ────────────────────────────────────────
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-    _plot_feature_importance(axes[0], r_no_fs["sel_feats"], r_no_fs["importances"],
-                             r_no_fs["rank"],
-                             f"No FS ({r_no_fs['n_features']} features)")
-    _plot_feature_importance(axes[1], r_fs["sel_feats"], r_fs["importances"],
+    _plot_feature_importance(axes[1, 2], r_fs["sel_feats"], r_fs["importances"],
                              r_fs["rank"],
-                             f"With FS ({r_fs['n_features']} features)")
-    fig.suptitle(f"{model_name} – Feature Importance", fontsize=14, fontweight="bold", y=0.995)
+                             f"With FS – Feature Importance ({r_fs['n_features']} features)")
+
+    fig.suptitle(f"{model_name} – Overview", fontsize=14, fontweight="bold", y=0.995)
     plt.tight_layout()
-    path = os.path.join(out_dir, f"{model_name}_feature_importance.png")
+    path = os.path.join(out_dir, f"{model_name}_overview.png")
     fig.savefig(path, dpi=300, bbox_inches="tight"); plt.close(fig)
     print(f"  Saved: {path}")
 
