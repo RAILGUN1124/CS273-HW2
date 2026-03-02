@@ -1,0 +1,122 @@
+Loaded 260 samples from reviewFeatures.csv
+Class distribution  → Real: 130  Fake: 130
+
+Step 0  – Data split
+  Train+Val : 208  (Real=104, Fake=104)
+  Test      : 52  (Real=26, Fake=26)
+
+Step 1  – 5-Fold Stratified CV  (verifying stratification)
+  Fold   Train Real Train Fake Train %Real  │  Val Real Val Fake Val %Real
+  ------------------------------------------------------------------------
+  1              83         83       50.0%  │        21       21     50.0%
+  2              83         83       50.0%  │        21       21     50.0%
+  3              83         83       50.0%  │        21       21     50.0%
+  4              84         83       50.3%  │        20       21     48.8%
+  5              83         84       49.7%  │        21       20     51.2%
+  Overall class ratio: 50.0% Real
+
+>>> Tuning: ExtraTrees (no FS)  (300 Optuna trials) …
+    [No FS]  CV-F1=0.6063  Train-Acc=0.9327  Test-Acc=0.7308  Test-F1=0.7083  feats=10
+
+>>> Tuning: ExtraTrees (FS)  (300 Optuna trials) …
+    [With FS]  CV-F1=0.6228  Train-Acc=0.7452  Test-Acc=0.7692  Test-F1=0.7692  feats=7
+
+=================================================================
+  ExtraTrees – No FS
+=================================================================
+  Best CV F1 (mean) : 0.6063
+  Best Optuna params: {'n_estimators': 100, 'max_depth': 10, 'min_samples_split': 6, 'min_samples_leaf': 2, 'max_features': 'log2'}
+
+  ── Train-set results ──
+  Accuracy : 0.9327
+
+  ── Test-set results ──
+  Accuracy : 0.7308
+  F1-score : 0.7083
+  Features : 10
+
+  Confusion Matrix:
+[[21  5]
+ [ 9 17]]
+
+              precision    recall  f1-score   support
+
+        Fake       0.70      0.81      0.75        26
+        Real       0.77      0.65      0.71        26
+
+    accuracy                           0.73        52
+   macro avg       0.74      0.73      0.73        52
+weighted avg       0.74      0.73      0.73        52
+
+  Feature importance ranking:
+    1.  NAJ  →  0.1753
+    2.  NST  →  0.1495
+    3.  NWO  →  0.1478
+    4.  NVB  →  0.1103
+    5.  AWL  →  0.0854
+    6.  CDV  →  0.0841
+    7.  ASL  →  0.0733
+    8.  NTP  →  0.0645
+    9.  TPR  →  0.0614
+    10.  NPV  →  0.0483
+
+=================================================================
+  ExtraTrees – With FS
+=================================================================
+  Best CV F1 (mean) : 0.6228
+  Best Optuna params: {'n_estimators': 250, 'max_depth': 15, 'min_samples_split': 4, 'min_samples_leaf': 9, 'max_features': None, 'selector_k': 7, 'score_func': 'f_classif'}
+  Selected features : ['AWL', 'NWO', 'NVB', 'NAJ', 'NST', 'CDV', 'TPR']
+
+  ── Train-set results ──
+  Accuracy : 0.7452
+
+  ── Test-set results ──
+  Accuracy : 0.7692
+  F1-score : 0.7692
+  Features : 7
+
+  Confusion Matrix:
+[[20  6]
+ [ 6 20]]
+
+              precision    recall  f1-score   support
+
+        Fake       0.77      0.77      0.77        26
+        Real       0.77      0.77      0.77        26
+
+    accuracy                           0.77        52
+   macro avg       0.77      0.77      0.77        52
+weighted avg       0.77      0.77      0.77        52
+
+  Feature importance ranking:
+    1.  NAJ  →  0.3550
+    2.  NWO  →  0.1861
+    3.  NST  →  0.1851
+    4.  NVB  →  0.1018
+    5.  AWL  →  0.0946
+    6.  CDV  →  0.0449
+    7.  TPR  →  0.0325
+
+  Model saved → /Users/lawrencechen/Downloads/CS273-HW2/ExtraTrees/best_model_no_fs.joblib
+  Model saved → /Users/lawrencechen/Downloads/CS273-HW2/ExtraTrees/best_model_with_fs.joblib
+
+=================================================================
+  SUMMARY COMPARISON
+=================================================================
+Metric                                No FS        With FS
+----------------------------------------------------------
+Model                            ExtraTrees     ExtraTrees
+Train Accuracy                       0.9327         0.7452
+Test Accuracy                        0.7308         0.7692
+F1-score (main metric)               0.7083         0.7692
+# Selected features                      10              7
+Most important feature                  NAJ            NAJ
+----------------------------------------------------------
+
+  → Overall winner (by F1): ExtraTrees (with feature selection)  F1 = 0.7692
+
+
+>>> Generating plots → /Users/lawrencechen/Downloads/CS273-HW2/ExtraTrees/plots
+  Saved: /Users/lawrencechen/Downloads/CS273-HW2/ExtraTrees/plots/ExtraTrees_overview.png
+  Saved: /Users/lawrencechen/Downloads/CS273-HW2/ExtraTrees/plots/ExtraTrees_performance.png
+  Total PNGs: 3
