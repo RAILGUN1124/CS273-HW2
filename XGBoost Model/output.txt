@@ -1,0 +1,122 @@
+  XGBoost device: CUDA (GPU accelerated) 
+Loaded 260 samples from reviewFeatures.csv
+Class distribution  → Real: 130  Fake: 130
+
+Step 0  – Data split
+  Train+Val : 208  (Real=104, Fake=104)
+  Test      : 52  (Real=26, Fake=26)
+
+Step 1  – 5-Fold Stratified CV  (verifying stratification)
+  Fold   Train Real Train Fake Train %Real  │  Val Real Val Fake Val %Real
+  ------------------------------------------------------------------------
+  1              83         83       50.0%  │        21       21     50.0%
+  2              83         83       50.0%  │        21       21     50.0%
+  3              83         83       50.0%  │        21       21     50.0%
+  4              84         83       50.3%  │        20       21     48.8%
+  5              83         84       49.7%  │        21       20     51.2%
+  Overall class ratio: 50.0% Real
+
+>>> Tuning: XGBoost (no FS)  (300 Optuna trials) …
+    [No FS]  CV-F1=0.6393  Train-Acc=0.7933  Test-Acc=0.6923  Test-F1=0.7037  feats=10
+
+>>> Tuning: XGBoost (FS)  (300 Optuna trials) …
+    [With FS]  CV-F1=0.6548  Train-Acc=0.8894  Test-Acc=0.6923  Test-F1=0.6800  feats=5
+
+=================================================================
+  XGBoost – No FS
+=================================================================
+  Best CV F1 (mean) : 0.6393
+  Best Optuna params: {'n_estimators': 450, 'max_depth': 8, 'learning_rate': 0.05944282934717435, 'subsample': 0.6538152362834918, 'colsample_bytree': 0.6918150839427865, 'min_child_weight': 8, 'reg_alpha': 0.0010855242636897842, 'reg_lambda': 4.204528408133401}
+
+  ── Train-set results ──
+  Accuracy : 0.7933
+
+  ── Test-set results ──
+  Accuracy : 0.6923
+  F1-score : 0.7037
+  Features : 10
+
+  Confusion Matrix:
+[[17  9]
+ [ 7 19]]
+
+              precision    recall  f1-score   support
+
+        Fake       0.71      0.65      0.68        26
+        Real       0.68      0.73      0.70        26
+
+    accuracy                           0.69        52
+   macro avg       0.69      0.69      0.69        52
+weighted avg       0.69      0.69      0.69        52
+
+  Feature importance ranking:
+    1.  NST  →  0.1765
+    2.  NAJ  →  0.1673
+    3.  TPR  →  0.1140
+    4.  NVB  →  0.1049
+    5.  AWL  →  0.0927
+    6.  NWO  →  0.0913
+    7.  NTP  →  0.0870
+    8.  ASL  →  0.0853
+    9.  CDV  →  0.0810
+    10.  NPV  →  0.0000
+
+=================================================================
+  XGBoost – With FS
+=================================================================
+  Best CV F1 (mean) : 0.6548
+  Best Optuna params: {'n_estimators': 500, 'max_depth': 8, 'learning_rate': 0.016490074390135303, 'subsample': 0.6340600482371216, 'colsample_bytree': 0.864734749689217, 'min_child_weight': 2, 'reg_alpha': 0.0014723688873198044, 'reg_lambda': 1.6634169464207376, 'selector_k': 5, 'score_func': 'f_classif'}
+  Selected features : ['AWL', 'NWO', 'NVB', 'NAJ', 'NST']
+
+  ── Train-set results ──
+  Accuracy : 0.8894
+
+  ── Test-set results ──
+  Accuracy : 0.6923
+  F1-score : 0.6800
+  Features : 5
+
+  Confusion Matrix:
+[[19  7]
+ [ 9 17]]
+
+              precision    recall  f1-score   support
+
+        Fake       0.68      0.73      0.70        26
+        Real       0.71      0.65      0.68        26
+
+    accuracy                           0.69        52
+   macro avg       0.69      0.69      0.69        52
+weighted avg       0.69      0.69      0.69        52
+
+  Feature importance ranking:
+    1.  NAJ  →  0.2475
+    2.  NST  →  0.1963
+    3.  AWL  →  0.1962
+    4.  NWO  →  0.1844
+    5.  NVB  →  0.1756
+
+  Model saved → /content/best_model_xgb_no_fs.joblib
+  Model saved → /content/best_model_xgb_with_fs.joblib
+
+=================================================================
+  SUMMARY COMPARISON
+=================================================================
+Metric                                No FS        With FS
+----------------------------------------------------------
+Model                               XGBoost        XGBoost
+Train Accuracy                       0.7933         0.8894
+Test Accuracy                        0.6923         0.6923
+F1-score (main metric)               0.7037         0.6800
+# Selected features                      10              5
+Most important feature                  NST            NAJ
+----------------------------------------------------------
+
+  → Overall winner (by F1): XGBoost (no feature selection)  F1 = 0.7037
+
+
+>>> Generating plots → /content/plots
+  Saved: /content/plots/XGBoost_overview.png
+  Saved: /content/plots/XGBoost_performance.png
+
+  Total PNGs: 2

@@ -486,7 +486,6 @@ def main():
         r_fs = next(r for r in results if r["name"] == model_name and r["fs"])
         save_model_plots(model_name, r_nf, r_fs, y_tv, y_te, plot_dir)
 
-    # 1 PNG for the ensemble
 
     print(f"\n  Total PNGs: {len(MODEL_REGISTRY) * 3 + 1}")
 

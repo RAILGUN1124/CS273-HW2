@@ -1,9 +1,18 @@
 """
-XGBoost classifier for Fake vs Real review detection.
-Pipeline: 
-1. Data split: 60% Training, 20% Validation, 20% Test (stratified, shuffled)
-2. 5-fold Cross Validation on 80% (train+val) for hyperparameter tuning
-3. With feature selection: SelectKBest (f_classif)
+Restaurant Review Classifier – Fake vs Real
+=============================================
+Pipeline:
+  Step 0: Hold out 20% stratified test set
+  Step 1: 5-fold Stratified CV on remaining 80% (train+val) for hyper-param tuning
+  Step 2: Select best hyperparameters (by mean CV F1) via Optuna
+  Step 3: Retrain on full train+val with best params
+  Step 4: Evaluate once on held-out test set
+
+Two variants compared:
+  A) No feature selection  (all 10 features)
+  B) With feature selection (SelectKBest + f_classif)
+
+Models tried: XGBoost
 """
 
 import os
@@ -12,31 +21,47 @@ import numpy as np
 import pandas as pd
 import joblib
 import optuna
-import xgboost as xgb
 
 from sklearn.model_selection import StratifiedKFold, train_test_split, cross_val_score
-from sklearn.feature_selection import SelectKBest, f_classif
+from xgboost import XGBClassifier
+from sklearn.feature_selection import SelectKBest, f_classif, mutual_info_classif
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import accuracy_score, f1_score, classification_report, confusion_matrix
+from sklearn.inspection import permutation_importance
 import matplotlib.pyplot as plt
 import seaborn as sns
 
 sns.set_style("whitegrid")
 plt.rcParams["font.size"] = 9
+
 warnings.filterwarnings("ignore")
 optuna.logging.set_verbosity(optuna.logging.WARNING)
-
-RANDOM_STATE = 1935990857 
+RANDOM_STATE = 1935990857
 np.random.seed(RANDOM_STATE)
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
+# ── Constants ──────────────────────────────────────────────────────────────
 FEATURE_COLS = ["AWL", "ASL", "NWO", "NVB", "NAJ", "NPV", "NST", "CDV", "NTP", "TPR"]
 LABEL_COL = "Real=1/Fake=0"
-N_OPTUNA_TRIALS = 250
+N_OPTUNA_TRIALS = 300
 
+
+def _detect_xgb_device() -> str:
+    """Return 'cuda' if XGBoost can access a CUDA GPU, else 'cpu'."""
+    try:
+        import xgboost as xgb
+        dm = xgb.DMatrix([[0]], label=[0])
+        xgb.train({"device": "cuda", "verbosity": 0}, dm, num_boost_round=1)
+        return "cuda"
+    except Exception:
+        return "cpu"
+
+DEVICE = _detect_xgb_device()
+
+
+# =========================================================================
+#  Data loading & splitting
+# =========================================================================
 
 def load_data(csv_path: str) -> tuple:
     """Load feature CSV and return X, y arrays."""
@@ -44,24 +69,42 @@ def load_data(csv_path: str) -> tuple:
     print(f"Loaded {len(df)} samples from {os.path.basename(csv_path)}")
     X = df[FEATURE_COLS].values
     y = df[LABEL_COL].values
-    print(f"Class distribution → Real: {(y == 1).sum()}  Fake: {(y == 0).sum()}")
+    print(f"Class distribution  → Real: {(y == 1).sum()}  Fake: {(y == 0).sum()}")
     return X, y
 
 
 def split_data(X: np.ndarray, y: np.ndarray) -> tuple:
-    """80% train+val (for 5-fold CV and final fit), 20% test. Stratified and shuffled."""
+    """Step 0: 80/20 stratified split into (train+val) and test."""
     X_tv, X_te, y_tv, y_te = train_test_split(
-        X, y, test_size=0.20, random_state=RANDOM_STATE, stratify=y, shuffle=True
+        X, y, test_size=0.20, random_state=RANDOM_STATE, stratify=y, shuffle=True,
     )
-    n = len(y)
     print(f"\nStep 0  – Data split")
-    print(f"  Train+Val : {len(y_tv)} ({len(y_tv)/n*100:.1f}%)  Real={(y_tv==1).sum()}, Fake={(y_tv==0).sum()}")
-    print(f"  Test      : {len(y_te)} ({len(y_te)/n*100:.1f}%)  Real={(y_te==1).sum()}, Fake={(y_te==0).sum()}")
+    print(f"  Train+Val : {len(y_tv)}  (Real={(y_tv==1).sum()}, Fake={(y_tv==0).sum()})")
+    print(f"  Test      : {len(y_te)}  (Real={(y_te==1).sum()}, Fake={(y_te==0).sum()})")
     return X_tv, X_te, y_tv, y_te
 
 
+# =========================================================================
+#  Optuna objective factories (one per model type)
+# =========================================================================
+
 def _make_cv():
     return StratifiedKFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE)
+
+
+def print_cv_stratification(X, y):
+    """Print per-fold class distribution to verify stratification."""
+    cv = _make_cv()
+    print(f"\nStep 1  – 5-Fold Stratified CV  (verifying stratification)")
+    print(f"  {'Fold':<6} {'Train Real':>10} {'Train Fake':>10} {'Train %Real':>11}  │  {'Val Real':>8} {'Val Fake':>8} {'Val %Real':>9}")
+    print(f"  {'-'*72}")
+    for i, (train_idx, val_idx) in enumerate(cv.split(X, y), 1):
+        y_tr, y_val = y[train_idx], y[val_idx]
+        tr_real, tr_fake = (y_tr == 1).sum(), (y_tr == 0).sum()
+        va_real, va_fake = (y_val == 1).sum(), (y_val == 0).sum()
+        print(f"  {i:<6} {tr_real:>10} {tr_fake:>10} {tr_real/len(y_tr)*100:>10.1f}%  │  {va_real:>8} {va_fake:>8} {va_real/len(y_val)*100:>8.1f}%")
+    total_real_pct = (y == 1).sum() / len(y) * 100
+    print(f"  Overall class ratio: {total_real_pct:.1f}% Real")
 
 
 def xgb_hyperparameters(trial: optuna.Trial) -> dict:
@@ -76,20 +119,30 @@ def xgb_hyperparameters(trial: optuna.Trial) -> dict:
         "reg_alpha": trial.suggest_float("reg_alpha", 1e-4, 5.0, log=True),
         "reg_lambda": trial.suggest_float("reg_lambda", 1e-4, 5.0, log=True),
         "random_state": RANDOM_STATE,
+        "device": DEVICE,
     }
 
 
-def build_objective(X_tv, y_tv, use_fs: bool):
-    """5-fold CV mean F1 for XGBoost optimization"""
+MODEL_REGISTRY = {
+    "XGBoost": (XGBClassifier, xgb_hyperparameters),
+}
+
+
+def _build_objective(model_cls, suggest_fn, X_tv, y_tv, use_fs: bool):
+    """Return an Optuna objective that does 5-fold CV and returns mean F1."""
     cv = _make_cv()
 
     def objective(trial: optuna.Trial) -> float:
-        params = xgb_hyperparameters(trial)
+        params = suggest_fn(trial)
+
         steps = [("scaler", StandardScaler())]
         if use_fs:
-            k = trial.suggest_int("selector_k", 4, 10)
-            steps.append(("selector", SelectKBest(score_func=f_classif, k=min(k, 10))))
-        steps.append(("clf", xgb.XGBClassifier(**params)))
+            k = trial.suggest_int("selector_k", 3, 9) #Only half of the features, at least 3 to avoid too small feature sets and at most 9 to not be the same as baseline (all features)
+            score_func_name = trial.suggest_categorical("score_func", ["f_classif", "mutual_info"])
+            score_func = f_classif if score_func_name == "f_classif" else mutual_info_classif
+            steps.append(("selector", SelectKBest(score_func=score_func, k=k)))
+        steps.append(("clf", model_cls(**params)))
+
         pipe = Pipeline(steps)
         scores = cross_val_score(pipe, X_tv, y_tv, cv=cv, scoring="f1", n_jobs=-1)
         return scores.mean()
@@ -97,53 +150,98 @@ def build_objective(X_tv, y_tv, use_fs: bool):
     return objective
 
 
-def tune_model(X_tv, y_tv, use_fs: bool) -> dict:
-    """Run Optuna study for XGBoost optimization"""
-    objective = build_objective(X_tv, y_tv, use_fs)
+# =========================================================================
+#  Hyperparameter search + final training
+# =========================================================================
+
+def tune_model(model_name: str, X_tv, y_tv, use_fs: bool) -> dict:
+    """Run Optuna study for a single (model, feature-selection) variant."""
+    model_cls, suggest_fn = MODEL_REGISTRY[model_name]
+    objective = _build_objective(model_cls, suggest_fn, X_tv, y_tv, use_fs)
+
     study = optuna.create_study(direction="maximize", sampler=optuna.samplers.TPESampler(seed=RANDOM_STATE))
-    study.optimize(objective, n_trials=N_OPTUNA_TRIALS, show_progress_bar=True)
-    return {"best_cv_f1": study.best_value, "best_params": study.best_params}
+    study.optimize(objective, n_trials=N_OPTUNA_TRIALS, show_progress_bar=False)
+
+    return {
+        "best_cv_f1": study.best_value,
+        "best_params": study.best_params,
+    }
 
 
-def build_final_pipeline(best_params: dict, use_fs: bool) -> Pipeline:
-    """Build pipeline from best Optuna params"""
-    best_params = dict(best_params)
+def build_final_pipeline(model_name: str, best_params: dict, use_fs: bool) -> Pipeline:
+    """Construct a Pipeline from the best Optuna params and return it (unfitted)."""
+    model_cls, _ = MODEL_REGISTRY[model_name]
+
+    # Separate selector params from model params
     selector_k = best_params.pop("selector_k", None)
+    score_func_name = best_params.pop("score_func", "f_classif")
     clf_params = {k: v for k, v in best_params.items()}
+
+    # Ensure random_state is set
     if "random_state" not in clf_params:
         clf_params["random_state"] = RANDOM_STATE
 
     steps = [("scaler", StandardScaler())]
     if use_fs and selector_k is not None:
-        steps.append(("selector", SelectKBest(score_func=f_classif, k=min(selector_k, 10))))
-    steps.append(("clf", xgb.XGBClassifier(**clf_params)))
+        score_func = f_classif if score_func_name == "f_classif" else mutual_info_classif
+        steps.append(("selector", SelectKBest(score_func=score_func, k=selector_k)))
+    steps.append(("clf", model_cls(**clf_params)))
+
     return Pipeline(steps)
 
 
-def get_feature_info(pipe: Pipeline, use_fs: bool, X_data: np.ndarray = None, y_data: np.ndarray = None) -> tuple:
-    """Return (selected_feature_names, importance_array, rank_indices, n_features)"""
-    if use_fs and "selector" in pipe.named_steps:
-        mask = pipe.named_steps["selector"].get_support()
+def evaluate_on_test(pipeline: Pipeline, X_test, y_test) -> tuple:
+    """Return (accuracy, f1, y_pred)."""
+    y_pred = pipeline.predict(X_test)
+    return accuracy_score(y_test, y_pred), f1_score(y_test, y_pred), y_pred
+
+
+def get_feature_info(pipeline: Pipeline, use_fs: bool,
+                     X_data: np.ndarray = None, y_data: np.ndarray = None) -> tuple:
+    """Return (selected_feature_names, importance_array, ranked_indices).
+
+    Uses native feature_importances_ or coef_ when available;
+    falls back to permutation importance on the supplied data.
+    """
+    if use_fs and "selector" in pipeline.named_steps:
+        mask = pipeline.named_steps["selector"].get_support()
         sel_feats = [f for f, s in zip(FEATURE_COLS, mask) if s]
     else:
         sel_feats = list(FEATURE_COLS)
 
-    clf = pipe.named_steps["clf"]
+    # True number of features the classifier actually sees
+    actual_n_features = len(sel_feats)
+
+    clf = pipeline.named_steps["clf"]
     if hasattr(clf, "feature_importances_"):
         imp = clf.feature_importances_
+    elif hasattr(clf, "coef_"):
+        imp = np.abs(clf.coef_).ravel()
+        if len(imp) != len(sel_feats):
+            imp = np.mean(np.abs(clf.coef_), axis=0)
+    elif X_data is not None and y_data is not None:
+        # Permutation importance fallback
+        # Computed on the full pipeline, so importance is per *input* feature
+        perm = permutation_importance(
+            pipeline, X_data, y_data,
+            n_repeats=10, random_state=RANDOM_STATE, scoring="f1", n_jobs=-1,
+        )
+        imp = perm.importances_mean
+        # Override sel_feats to match full input (pipeline handles selection internally)
+        sel_feats = list(FEATURE_COLS)
     else:
         imp = np.zeros(len(sel_feats))
 
     rank = np.argsort(imp)[::-1]
-    return sel_feats, imp, rank, len(sel_feats)
+    return sel_feats, imp, rank, actual_n_features
 
 
-# ---------------------------------------------------------------------------
-# Plot
-# ---------------------------------------------------------------------------
+# =========================================================================
+#  Visualization helpers
+# =========================================================================
 
-def _plot_cm(ax, cm, title: str, cmap: str = "Blues"):
-    """Draw confusion matrix heatmap on ax."""
+def _plot_confusion_matrix(ax, cm, title, cmap="Blues"):
+    """Draw a single confusion matrix heatmap on ax."""
     sns.heatmap(cm, annot=True, fmt="d", cmap=cmap, ax=ax, cbar=False, square=True,
                 xticklabels=["Fake", "Real"], yticklabels=["Fake", "Real"])
     ax.set_xlabel("Predicted", fontsize=8)
@@ -151,9 +249,9 @@ def _plot_cm(ax, cm, title: str, cmap: str = "Blues"):
     ax.set_title(title, fontsize=9, fontweight="bold")
 
 
-def _plot_feature_importance(ax, sel_feats, importances, rank, title: str):
+def _plot_feature_importance(ax, sel_feats, importances, rank, title):
     """Horizontal bar chart of feature importances."""
-    if len(sel_feats) == 0 or np.all(importances == 0):
+    if np.all(importances == 0):
         ax.text(0.5, 0.5, "No importance\navailable", ha="center", va="center",
                 fontsize=12, color="grey", transform=ax.transAxes)
         ax.set_title(title, fontsize=9, fontweight="bold")
@@ -171,187 +269,231 @@ def _plot_feature_importance(ax, sel_feats, importances, rank, title: str):
     ax.grid(True, alpha=0.3, axis="x")
 
 
-def save_xgb_plots(r_no_fs: dict, r_fs: dict, y_tv: np.ndarray, y_te: np.ndarray, out_dir: str):
-    """Save confusion matrices, feature importance, and performance comparison PNGs."""
-    os.makedirs(out_dir, exist_ok=True)
+def save_model_plots(model_name: str, r_no_fs: dict, r_fs: dict,
+                     y_tv: np.ndarray, y_te: np.ndarray, out_dir: str):
+    """Generate 2 PNGs for a single model (no-FS & with-FS variants).
 
-    # 1. Confusion matrices
-    fig, axes = plt.subplots(2, 2, figsize=(10, 8))
-    _plot_cm(axes[0, 0], confusion_matrix(y_tv, r_no_fs["y_train_pred"]),
-             f"No FS – Train\nAcc={r_no_fs['train_acc']:.3f}", "Blues")
-    _plot_cm(axes[0, 1], confusion_matrix(y_te, r_no_fs["y_pred"]),
-             f"No FS – Test\nAcc={r_no_fs['test_acc']:.3f}  F1={r_no_fs['test_f1']:.3f}", "Oranges")
-    _plot_cm(axes[1, 0], confusion_matrix(y_tv, r_fs["y_train_pred"]),
-             f"With FS – Train\nAcc={r_fs['train_acc']:.3f}", "Blues")
-    _plot_cm(axes[1, 1], confusion_matrix(y_te, r_fs["y_pred"]),
-             f"With FS – Test\nAcc={r_fs['test_acc']:.3f}  F1={r_fs['test_f1']:.3f}", "Oranges")
-    fig.suptitle("XGBoost – Confusion Matrices", fontsize=14, fontweight="bold", y=0.995)
+    Files produced:
+      {model}_overview.png
+      {model}_performance.png
+    """
+    # ── PNG 1: Overview (2×3) – CMs + Feature Importance ──────────────────
+    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+    train_cm_nf = confusion_matrix(y_tv, r_no_fs["y_train_pred"])
+    test_cm_nf  = confusion_matrix(y_te, r_no_fs["y_pred"])
+    train_cm_fs = confusion_matrix(y_tv, r_fs["y_train_pred"])
+    test_cm_fs  = confusion_matrix(y_te, r_fs["y_pred"])
+
+    # Top row – No FS
+    _plot_confusion_matrix(axes[0, 0], train_cm_nf,
+        f"No FS – Train\nAcc={r_no_fs['train_acc']:.3f}", "Blues")
+    _plot_confusion_matrix(axes[0, 1], test_cm_nf,
+        f"No FS – Test\nAcc={r_no_fs['acc']:.3f}  F1={r_no_fs['f1']:.3f}", "Oranges")
+    _plot_feature_importance(axes[0, 2], r_no_fs["sel_feats"], r_no_fs["importances"],
+                             r_no_fs["rank"],
+                             f"No FS – Feature Importance ({r_no_fs['n_features']} features)")
+
+    # Bottom row – With FS
+    _plot_confusion_matrix(axes[1, 0], train_cm_fs,
+        f"With FS – Train\nAcc={r_fs['train_acc']:.3f}", "Blues")
+    _plot_confusion_matrix(axes[1, 1], test_cm_fs,
+        f"With FS – Test\nAcc={r_fs['acc']:.3f}  F1={r_fs['f1']:.3f}", "Oranges")
+    _plot_feature_importance(axes[1, 2], r_fs["sel_feats"], r_fs["importances"],
+                             r_fs["rank"],
+                             f"With FS – Feature Importance ({r_fs['n_features']} features)")
+
+    fig.suptitle(f"{model_name} – Overview", fontsize=14, fontweight="bold", y=0.995)
     plt.tight_layout()
-    path = os.path.join(out_dir, "XGBoost_confusion_matrices.png")
-    fig.savefig(path, dpi=300, bbox_inches="tight")
-    plt.close(fig)
+    path = os.path.join(out_dir, f"{model_name}_overview.png")
+    fig.savefig(path, dpi=300, bbox_inches="tight"); plt.close(fig)
     print(f"  Saved: {path}")
 
-    # 2. Feature importance (No FS vs FS)
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-    _plot_feature_importance(axes[0], r_no_fs["sel_feats"], r_no_fs["importances"], r_no_fs["rank"],
-                             f"No FS ({r_no_fs['n_features']} features)")
-    _plot_feature_importance(axes[1], r_fs["sel_feats"], r_fs["importances"], r_fs["rank"],
-                             f"With FS ({r_fs['n_features']} features)")
-    fig.suptitle("XGBoost – Feature Importance", fontsize=14, fontweight="bold", y=0.995)
-    plt.tight_layout()
-    path = os.path.join(out_dir, "XGBoost_feature_importance.png")
-    fig.savefig(path, dpi=300, bbox_inches="tight")
-    plt.close(fig)
-    print(f"  Saved: {path}")
-
-    # 3. Performance comparison
+    # ── PNG 2: Performance Comparison ────────────────────────────────────
     fig, axes = plt.subplots(1, 3, figsize=(16, 5))
-    metrics = ["Train Acc", "Test Acc", "Test F1", "CV F1"]
-    vals_nf = [r_no_fs["train_acc"], r_no_fs["test_acc"], r_no_fs["test_f1"], r_no_fs["best_cv_f1"]]
-    vals_fs = [r_fs["train_acc"], r_fs["test_acc"], r_fs["test_f1"], r_fs["best_cv_f1"]]
-    x = np.arange(len(metrics))
-    w = 0.35
-    axes[0].bar(x - w / 2, vals_nf, w, label="No FS", color="steelblue", edgecolor="black")
-    axes[0].bar(x + w / 2, vals_fs, w, label="With FS", color="darkorange", edgecolor="black")
-    axes[0].set_xticks(x)
-    axes[0].set_xticklabels(metrics, fontsize=8)
-    axes[0].set_ylabel("Score")
-    axes[0].set_ylim([0, 1.05])
-    axes[0].set_title("No FS vs With FS", fontsize=10, fontweight="bold")
-    axes[0].legend(fontsize=8)
-    axes[0].grid(True, alpha=0.3, axis="y")
 
-    f1_no_fs = f1_score(y_te, r_no_fs["y_pred"], average=None)
-    axes[1].bar(["Fake", "Real"], f1_no_fs, color=sns.color_palette("viridis", 2), edgecolor="black")
-    axes[1].set_ylabel("F1")
-    axes[1].set_ylim([0, 1.05])
-    axes[1].set_title(f"Per-Class F1 – No FS (macro={r_no_fs['test_f1']:.3f})", fontsize=10, fontweight="bold")
+    # 2a – Metric bars: No FS vs FS
+    metrics = ["Train Acc", "Test Acc", "Test F1", "CV F1"]
+    vals_nf = [r_no_fs["train_acc"], r_no_fs["acc"], r_no_fs["f1"], r_no_fs["best_cv_f1"]]
+    vals_fs = [r_fs["train_acc"], r_fs["acc"], r_fs["f1"], r_fs["best_cv_f1"]]
+    x = np.arange(len(metrics)); w = 0.35
+    axes[0].bar(x - w/2, vals_nf, w, label="No FS", color="steelblue", edgecolor="black")
+    axes[0].bar(x + w/2, vals_fs, w, label="With FS", color="darkorange", edgecolor="black")
+    axes[0].set_xticks(x); axes[0].set_xticklabels(metrics, fontsize=8)
+    axes[0].set_ylabel("Score"); axes[0].set_ylim([0, 1.05])
+    axes[0].set_title("No FS vs With FS", fontsize=10, fontweight="bold")
+    axes[0].legend(fontsize=8); axes[0].grid(True, alpha=0.3, axis="y")
+
+    # 2b – Per-class F1 (No FS)
+    f1_pc_nf = f1_score(y_te, r_no_fs["y_pred"], average=None)
+    classes = ["Fake", "Real"]
+    colors_c = sns.color_palette("viridis", 2)
+    axes[1].bar(classes, f1_pc_nf, color=colors_c, edgecolor="black")
+    axes[1].set_ylabel("F1"); axes[1].set_ylim([0, 1.05])
+    axes[1].set_title(f"Per-Class F1 – No FS (macro={r_no_fs['f1']:.3f})",
+                      fontsize=10, fontweight="bold")
     axes[1].grid(True, alpha=0.3, axis="y")
 
-    f1_fs = f1_score(y_te, r_fs["y_pred"], average=None)
-    axes[2].bar(["Fake", "Real"], f1_fs, color=sns.color_palette("viridis", 2), edgecolor="black")
-    axes[2].set_ylabel("F1")
-    axes[2].set_ylim([0, 1.05])
-    axes[2].set_title(f"Per-Class F1 – With FS (macro={r_fs['test_f1']:.3f})", fontsize=10, fontweight="bold")
+    # 2c – Per-class F1 (FS)
+    f1_pc_fs = f1_score(y_te, r_fs["y_pred"], average=None)
+    axes[2].bar(classes, f1_pc_fs, color=colors_c, edgecolor="black")
+    axes[2].set_ylabel("F1"); axes[2].set_ylim([0, 1.05])
+    axes[2].set_title(f"Per-Class F1 – With FS (macro={r_fs['f1']:.3f})",
+                      fontsize=10, fontweight="bold")
     axes[2].grid(True, alpha=0.3, axis="y")
 
-    fig.suptitle("XGBoost – Performance Comparison", fontsize=14, fontweight="bold", y=0.995)
+    fig.suptitle(f"{model_name} – Performance Comparison", fontsize=14, fontweight="bold", y=0.995)
     plt.tight_layout()
-    path = os.path.join(out_dir, "XGBoost_performance.png")
-    fig.savefig(path, dpi=300, bbox_inches="tight")
-    plt.close(fig)
+    path = os.path.join(out_dir, f"{model_name}_performance.png")
+    fig.savefig(path, dpi=300, bbox_inches="tight"); plt.close(fig)
     print(f"  Saved: {path}")
 
-    # 4. Summary figure
-    best = r_fs if r_fs["test_f1"] >= r_no_fs["test_f1"] else r_no_fs
-    fig, axes = plt.subplots(1, 2, figsize=(10, 4))
-    _plot_cm(axes[0], confusion_matrix(y_te, best["y_pred"]),
-             f"Best (Test)\nAcc={best['test_acc']:.3f}  F1={best['test_f1']:.3f}", "Blues")
-    axes[1].axis("off")
-    summary = (
-        f"Best variant: {'With FS' if best['use_fs'] else 'No FS'}\n\n"
-        f"Test Accuracy: {best['test_acc']:.4f}\n"
-        f"Test F1:       {best['test_f1']:.4f}\n"
-        f"CV F1 (5-fold): {best['best_cv_f1']:.4f}\n"
-        f"# Features:    {best['n_features']}\n"
-        f"Most important: {best['most_important']}\n\n"
-        f"Benchmark: 79.09% Acc, 76.99% F1"
-    )
-    axes[1].text(0.1, 0.5, summary, fontsize=11, verticalalignment="center", family="monospace")
-    axes[1].set_title("Summary", fontsize=10, fontweight="bold")
-    fig.suptitle("XGBoost – Evaluation Summary", fontsize=12, fontweight="bold", y=1.02)
-    plt.tight_layout()
-    path = os.path.join(out_dir, "XGBoost_evaluation_summary.png")
-    fig.savefig(path, dpi=300, bbox_inches="tight")
-    plt.close(fig)
-    print(f"  Saved: {path}")
+# =========================================================================
+#  Reporting helpers
+# =========================================================================
+
+def print_variant_result(r: dict, y_test) -> None:
+    """Print detailed results for one variant."""
+    fs_tag = "With FS" if r["fs"] else "No FS"
+    print(f"\n{'=' * 65}")
+    print(f"  {r['name']} – {fs_tag}")
+    print(f"{'=' * 65}")
+    print(f"  Best CV F1 (mean) : {r['best_cv_f1']:.4f}")
+    print(f"  Best Optuna params: {r['best_params']}")
+    if r["fs"]:
+        print(f"  Selected features : {r['sel_feats']}")
+    print(f"\n  ── Train-set results ──")
+    print(f"  Accuracy : {r['train_acc']:.4f}")
+    print(f"\n  ── Test-set results ──")
+    print(f"  Accuracy : {r['acc']:.4f}")
+    print(f"  F1-score : {r['f1']:.4f}")
+    print(f"  Features : {r['n_features']}")
+    print(f"\n  Confusion Matrix:\n{confusion_matrix(y_test, r['y_pred'])}")
+    print(f"\n{classification_report(y_test, r['y_pred'], target_names=['Fake', 'Real'])}")
+    print("  Feature importance ranking:")
+    for i, idx in enumerate(r["rank"]):
+        print(f"    {i+1}. {r['sel_feats'][idx]:>4s}  →  {r['importances'][idx]:.4f}")
 
 
-def execute_model(X_tv, y_tv, X_te, y_te, use_fs: bool):
-    """Evaluate one variant (with or without FS)"""
-    label = "with SelectKBest" if use_fs else "no FS"
-    print(f"\n>>> Tuning XGBoost ({label}) ({N_OPTUNA_TRIALS} Optuna trials)")
-    result = tune_model(X_tv, y_tv, use_fs)
-    pipe = build_final_pipeline(dict(result["best_params"]), use_fs)
-    pipe.fit(X_tv, y_tv)
+def print_summary(best_no_fs: dict, best_with_fs: dict) -> None:
+    """Print the final comparison table."""
+    print(f"\n{'=' * 65}")
+    print(f"  SUMMARY COMPARISON")
+    print(f"{'=' * 65}")
+    print(f"{'Metric':<28} {'No FS':>14} {'With FS':>14}")
+    print("-" * 58)
+    print(f"{'Model':<28} {best_no_fs['name']:>14} {best_with_fs['name']:>14}")
+    print(f"{'Train Accuracy':<28} {best_no_fs['train_acc']:>14.4f} {best_with_fs['train_acc']:>14.4f}")
+    print(f"{'Test Accuracy':<28} {best_no_fs['acc']:>14.4f} {best_with_fs['acc']:>14.4f}")
+    print(f"{'F1-score (main metric)':<28} {best_no_fs['f1']:>14.4f} {best_with_fs['f1']:>14.4f}")
+    print(f"{'# Selected features':<28} {best_no_fs['n_features']:>14} {best_with_fs['n_features']:>14}")
+    a, b = best_no_fs, best_with_fs
+    print(f"{'Most important feature':<28} {a['sel_feats'][a['rank'][0]]:>14} "
+          f"{b['sel_feats'][b['rank'][0]]:>14}")
+    print("-" * 58)
 
-    y_train_pred = pipe.predict(X_tv)
-    train_acc = accuracy_score(y_tv, y_train_pred)
-    train_f1 = f1_score(y_tv, y_train_pred)
-    y_pred = pipe.predict(X_te)
-    test_acc = accuracy_score(y_te, y_pred)
-    test_f1 = f1_score(y_te, y_pred)
-    sel_feats, imp, rank, n_feats = get_feature_info(pipe, use_fs)
-    most_important = sel_feats[rank[0]] if len(sel_feats) else "—"
+    overall = best_with_fs if best_with_fs["f1"] >= best_no_fs["f1"] else best_no_fs
+    print(f"\n  → Overall winner (by F1): {overall['name']} "
+          f"({'with' if overall['fs'] else 'no'} feature selection)  "
+          f"F1 = {overall['f1']:.4f}\n")
 
-    return {
-        "use_fs": use_fs,
-        "pipe": pipe,
-        "best_cv_f1": result["best_cv_f1"],
-        "train_acc": train_acc,
-        "train_f1": train_f1,
-        "test_acc": test_acc,
-        "test_f1": test_f1,
-        "n_features": n_feats,
-        "sel_feats": sel_feats,
-        "most_important": most_important,
-        "rank": rank,
-        "importances": imp,
-        "y_pred": y_pred,
-        "y_train_pred": y_train_pred,
-    }
 
+# =========================================================================
+#  Main
+# =========================================================================
 
 def main():
+    # Paths
     data_path = os.path.join(os.path.dirname(__file__), "..", "Data", "reviewFeatures.csv")
     model_dir = os.path.dirname(__file__)
+    #model_dir = os.getcwd()
+    # GPU status
+    if DEVICE == "cuda":
+        print("  XGBoost device: CUDA (GPU accelerated) ")
+    else:
+        print("  XGBoost device: CPU (no CUDA GPU detected)")
 
+    # Load & split
     X, y = load_data(data_path)
     X_tv, X_te, y_tv, y_te = split_data(X, y)
 
-    r_no_fs = execute_model(X_tv, y_tv, X_te, y_te, use_fs=False)
-    r_fs = execute_model(X_tv, y_tv, X_te, y_te, use_fs=True)
+    # Verify CV stratification on train+val set
+    print_cv_stratification(X_tv, y_tv)
 
-    best = r_fs if r_fs["test_f1"] >= r_no_fs["test_f1"] else r_no_fs
-    tag = "with SelectKBest" if best["use_fs"] else "no FS"
+    # Run all (model × feature-selection) variants
+    results = []
+    for model_name in MODEL_REGISTRY:
+        for use_fs in [False, True]:
+            tag = f"{model_name} ({'FS' if use_fs else 'no FS'})"
+            print(f"\n>>> Tuning: {tag}  ({N_OPTUNA_TRIALS} Optuna trials) …", flush=True)
 
-    print(f"\n{'='*60}")
-    print(f"XGBoost {tag} (chosen by test F1)")
-    print(f"{'='*60}")
-    print(f"Best CV F1 - 5-fold : {best['best_cv_f1']:.4f}")
-    print(f"Train+Val Accuracy : {best['train_acc']:.4f}")
-    print(f"Train+Val F1       : {best['train_f1']:.4f}")
-    print(f"Test Accuracy     : {best['test_acc']:.4f}")
-    print(f"Test F1           : {best['test_f1']:.4f}")
-    print(f"# Selected features: {best['n_features']}")
-    print(f"Selected features : {best['sel_feats']}")
-    print(f"Most important    : {best['most_important']}")
-    print(f"\nFeature importance ranking:")
-    for i, idx in enumerate(best["rank"]):
-        print(f"    {i+1}. {best['sel_feats'][idx]:>4s}  →  {best['importances'][idx]:.4f}")
-    print(f"\n  Confusion Matrix:\n{confusion_matrix(y_te, best['y_pred'])}")
-    print(f"\n{classification_report(y_te, best['y_pred'], target_names=['Fake', 'Real'])}")
+            study_result = tune_model(model_name, X_tv, y_tv, use_fs)
 
-    out_path = os.path.join(model_dir, "best_model_xgb.joblib")
-    joblib.dump({"pipeline": best["pipe"], "features": FEATURE_COLS}, out_path)
-    print(f"\nModel saved → {out_path}")
+            # Step 3: retrain best model on ALL train+val
+            pipe = build_final_pipeline(model_name, dict(study_result["best_params"]), use_fs)
+            pipe.fit(X_tv, y_tv)
 
+            # Step 4: evaluate on train+val and test
+            y_train_pred = pipe.predict(X_tv)
+            train_acc = accuracy_score(y_tv, y_train_pred)
+            acc, f1, y_pred = evaluate_on_test(pipe, X_te, y_te)
+            sel_feats, imp, rank, actual_n_feats = get_feature_info(pipe, use_fs, X_tv, y_tv)
+
+            r = {
+                "name": model_name,
+                "fs": use_fs,
+                "best_cv_f1": study_result["best_cv_f1"],
+                "best_params": study_result["best_params"],
+                "train_acc": train_acc,
+                "acc": acc,
+                "f1": f1,
+                "n_features": actual_n_feats,
+                "sel_feats": sel_feats,
+                "importances": imp,
+                "rank": rank,
+                "model": pipe,
+                "y_pred": y_pred,
+                "y_train_pred": y_train_pred,
+            }
+            results.append(r)
+
+            lbl = "With FS" if use_fs else "No FS"
+            print(f"    [{lbl}]  CV-F1={r['best_cv_f1']:.4f}  "
+                  f"Train-Acc={train_acc:.4f}  Test-Acc={acc:.4f}  Test-F1={f1:.4f}  feats={len(sel_feats)}")
+
+    # Pick best per category
+    best_no_fs = sorted([r for r in results if not r["fs"]],
+                        key=lambda r: (-r["f1"], r["n_features"]))[0]
+    best_with_fs = sorted([r for r in results if r["fs"]],
+                          key=lambda r: (-r["f1"], r["n_features"]))[0]
+
+    # Detailed reports
+    print_variant_result(best_no_fs, y_te)
+    print_variant_result(best_with_fs, y_te)
+
+    # Save models
+    path_a = os.path.join(model_dir, "best_model_xgb_no_fs.joblib")
+    joblib.dump({"pipeline": best_no_fs["model"], "features": FEATURE_COLS}, path_a)
+    print(f"\n  Model saved → {path_a}")
+
+    path_b = os.path.join(model_dir, "best_model_xgb_with_fs.joblib")
+    joblib.dump({"pipeline": best_with_fs["model"], "features": FEATURE_COLS}, path_b)
+    print(f"  Model saved → {path_b}")
+
+    # Summary table
+    print_summary(best_no_fs, best_with_fs)
+
+    # ── Generate plots ─────────────────────────────────────────────────
     plot_dir = os.path.join(model_dir, "plots")
-    print(f"\n>>> Saving plots → {plot_dir}")
-    save_xgb_plots(r_no_fs, r_fs, y_tv, y_te, plot_dir)
+    os.makedirs(plot_dir, exist_ok=True)
+    print(f"\n>>> Generating plots → {plot_dir}")
 
-    print(f"\nNo FS  → Test Acc={r_no_fs['test_acc']:.4f}  F1={r_no_fs['test_f1']:.4f}")
-    print(f"With FS → Test Acc={r_fs['test_acc']:.4f}  F1={r_fs['test_f1']:.4f}")
+    # 2 PNGs per model (no-FS and FS variants side-by-side)
+    for model_name in MODEL_REGISTRY:
+        r_nf = next(r for r in results if r["name"] == model_name and not r["fs"])
+        r_fs = next(r for r in results if r["name"] == model_name and r["fs"])
+        save_model_plots(model_name, r_nf, r_fs, y_tv, y_te, plot_dir)
 
-    print(f"\nBenchmark: Accuracy 79.09%  F1 76.99%")
-    print(f"This run: Accuracy {best['test_acc']*100:.2f}%  F1 {best['test_f1']*100:.2f}%")
-    if best["test_acc"] >= 0.7909 and best["test_f1"] >= 0.7699:
-        print("Model meets or exceeds benchmark.")
-    else:
-        print("Model is below benchmark, try: increase OPTUNA_TRIALS")
-
-    return best
+    print(f"\n  Total PNGs: {len(MODEL_REGISTRY) * 2}")
 
 
 if __name__ == "__main__":
