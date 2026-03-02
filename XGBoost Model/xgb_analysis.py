@@ -27,7 +27,7 @@ plt.rcParams["font.size"] = 9
 warnings.filterwarnings("ignore")
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
-RANDOM_STATE = 1935990857 # 2985710947
+RANDOM_STATE = 1935990857 
 np.random.seed(RANDOM_STATE)
 
 # ---------------------------------------------------------------------------
