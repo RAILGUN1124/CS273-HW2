@@ -17,84 +17,84 @@ Step 1  – 5-Fold Stratified CV  (verifying stratification)
   Overall class ratio: 50.0% Real
 
 >>> Tuning: XGBoost (no FS)  (300 Optuna trials) …
-    [No FS]  CV-F1=0.6393  Train-Acc=0.7933  Test-Acc=0.6923  Test-F1=0.7037  feats=10
+    [No FS]  CV-F1=0.6394  Train-Acc=0.8029  Test-Acc=0.6154  Test-F1=0.6429  feats=10
 
 >>> Tuning: XGBoost (FS)  (300 Optuna trials) …
-    [With FS]  CV-F1=0.6548  Train-Acc=0.8894  Test-Acc=0.6923  Test-F1=0.6800  feats=5
+    [With FS]  CV-F1=0.6509  Train-Acc=0.9567  Test-Acc=0.6923  Test-F1=0.6923  feats=5
 
 =================================================================
   XGBoost – No FS
 =================================================================
-  Best CV F1 (mean) : 0.6393
-  Best Optuna params: {'n_estimators': 450, 'max_depth': 8, 'learning_rate': 0.05944282934717435, 'subsample': 0.6538152362834918, 'colsample_bytree': 0.6918150839427865, 'min_child_weight': 8, 'reg_alpha': 0.0010855242636897842, 'reg_lambda': 4.204528408133401}
+  Best CV F1 (mean) : 0.6394
+  Best Optuna params: {'n_estimators': 200, 'max_depth': 5, 'learning_rate': 0.19048310501225763, 'subsample': 0.6214178086339698, 'colsample_bytree': 0.6425955508616786, 'min_child_weight': 8, 'reg_alpha': 0.3915071192384318, 'reg_lambda': 1.61313702106586}
 
   ── Train-set results ──
-  Accuracy : 0.7933
+  Accuracy : 0.8029
 
   ── Test-set results ──
-  Accuracy : 0.6923
-  F1-score : 0.7037
+  Accuracy : 0.6154
+  F1-score : 0.6429
   Features : 10
 
   Confusion Matrix:
-[[17  9]
- [ 7 19]]
+[[14 12]
+ [ 8 18]]
 
               precision    recall  f1-score   support
 
-        Fake       0.71      0.65      0.68        26
-        Real       0.68      0.73      0.70        26
+        Fake       0.64      0.54      0.58        26
+        Real       0.60      0.69      0.64        26
 
-    accuracy                           0.69        52
-   macro avg       0.69      0.69      0.69        52
-weighted avg       0.69      0.69      0.69        52
+    accuracy                           0.62        52
+   macro avg       0.62      0.62      0.61        52
+weighted avg       0.62      0.62      0.61        52
 
   Feature importance ranking:
-    1.  NST  →  0.1765
-    2.  NAJ  →  0.1673
-    3.  TPR  →  0.1140
-    4.  NVB  →  0.1049
-    5.  AWL  →  0.0927
-    6.  NWO  →  0.0913
-    7.  NTP  →  0.0870
-    8.  ASL  →  0.0853
-    9.  CDV  →  0.0810
+    1.  NAJ  →  0.1705
+    2.  NST  →  0.1359
+    3.  NTP  →  0.1265
+    4.  TPR  →  0.1213
+    5.  NVB  →  0.0978
+    6.  NWO  →  0.0940
+    7.  AWL  →  0.0935
+    8.  CDV  →  0.0862
+    9.  ASL  →  0.0743
     10.  NPV  →  0.0000
 
 =================================================================
   XGBoost – With FS
 =================================================================
-  Best CV F1 (mean) : 0.6548
-  Best Optuna params: {'n_estimators': 500, 'max_depth': 8, 'learning_rate': 0.016490074390135303, 'subsample': 0.6340600482371216, 'colsample_bytree': 0.864734749689217, 'min_child_weight': 2, 'reg_alpha': 0.0014723688873198044, 'reg_lambda': 1.6634169464207376, 'selector_k': 5, 'score_func': 'f_classif'}
+  Best CV F1 (mean) : 0.6509
+  Best Optuna params: {'n_estimators': 400, 'max_depth': 10, 'learning_rate': 0.1453456550405408, 'subsample': 0.8719699653557837, 'colsample_bytree': 0.8597552860737454, 'min_child_weight': 4, 'reg_alpha': 0.7062865014070339, 'reg_lambda': 0.0016237156751999493, 'selector_k': 5, 'score_func': 'f_classif'}
   Selected features : ['AWL', 'NWO', 'NVB', 'NAJ', 'NST']
 
   ── Train-set results ──
-  Accuracy : 0.8894
+  Accuracy : 0.9567
 
   ── Test-set results ──
   Accuracy : 0.6923
-  F1-score : 0.6800
+  F1-score : 0.6923
   Features : 5
 
   Confusion Matrix:
-[[19  7]
- [ 9 17]]
+[[18  8]
+ [ 8 18]]
 
               precision    recall  f1-score   support
 
-        Fake       0.68      0.73      0.70        26
-        Real       0.71      0.65      0.68        26
+        Fake       0.69      0.69      0.69        26
+        Real       0.69      0.69      0.69        26
 
     accuracy                           0.69        52
    macro avg       0.69      0.69      0.69        52
 weighted avg       0.69      0.69      0.69        52
 
   Feature importance ranking:
-    1.  NAJ  →  0.2475
-    2.  NST  →  0.1963
-    3.  AWL  →  0.1962
-    4.  NWO  →  0.1844
-    5.  NVB  →  0.1756
+    1.  NAJ  →  0.2580
+    2.  NST  →  0.2217
+    3.  NVB  →  0.1772
+    4.  AWL  →  0.1750
+    5.  NWO  →  0.1682
 
   Model saved → /content/best_model_xgb_no_fs.joblib
   Model saved → /content/best_model_xgb_with_fs.joblib
@@ -105,14 +105,14 @@ weighted avg       0.69      0.69      0.69        52
 Metric                                No FS        With FS
 ----------------------------------------------------------
 Model                               XGBoost        XGBoost
-Train Accuracy                       0.7933         0.8894
-Test Accuracy                        0.6923         0.6923
-F1-score (main metric)               0.7037         0.6800
+Train Accuracy                       0.8029         0.9567
+Test Accuracy                        0.6154         0.6923
+F1-score (main metric)               0.6429         0.6923
 # Selected features                      10              5
-Most important feature                  NST            NAJ
+Most important feature                  NAJ            NAJ
 ----------------------------------------------------------
 
-  → Overall winner (by F1): XGBoost (no feature selection)  F1 = 0.7037
+  → Overall winner (by F1): XGBoost (with feature selection)  F1 = 0.6923
 
 
 >>> Generating plots → /content/plots
